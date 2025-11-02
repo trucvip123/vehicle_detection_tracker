@@ -103,7 +103,8 @@ class PaddleOCRWrapper:
                 img_array = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
 
             # Xử lý ảnh để cải thiện OCR
-            processed_images = self._preprocess_image_for_ocr(img_array)
+            # processed_images = self._preprocess_image_for_ocr(img_array)
+            processed_images = [img_array]
 
             all_text_results = []
 
@@ -174,13 +175,6 @@ class PaddleOCRWrapper:
                 if combined_text:
                     print(f"DEBUG: Combined OCR result: {combined_text}")
                     return combined_text.upper()
-
-                best_text = all_text_results[0][0]
-                print(
-                    f"DEBUG: Best OCR result: {best_text} (confidence: {all_text_results[0][1]:.2f})"
-                )
-                return best_text.upper()
-
             return "unknown"
 
         except Exception as e:
@@ -257,7 +251,7 @@ class PaddleOCRWrapper:
             return ""
         text = text.strip().upper()
         text = (
-            text.replace(" ", "").replace("O", "0").replace("I", "1").replace("T", "7")
+            text.replace(" ", "").replace("O", "0").replace("I", "1").replace("T", "7").replace("D", "0")
         )
         text = re.sub(r"[^A-Z0-9\.]", "", text)  # chỉ giữ ký tự hợp lệ
         return text
@@ -316,9 +310,6 @@ class PaddleOCRWrapper:
 
         unique_texts = list(unique_results.keys())
         print(f"DEBUG: All OCR results: {unique_texts}")
-
-        if len(unique_texts[0]) > 7:
-            return unique_texts[0]
 
         return self.merge_ocr_results(unique_texts)
 

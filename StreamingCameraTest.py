@@ -11,7 +11,7 @@ def main():
     
     # Option 1: Process camera/webcam stream (press 'q' to quit)
     print("Starting camera stream... (Press 'q' to quit)")
-    tracker.process_video_streaming(r"F:\OCR\License-Plate-Recognition\video\3.mp4")  # 0 for webcam, or use video file path
+    tracker.process_video_streaming(r"F:\OCR\License-Plate-Recognition\video\4.mp4")  # 0 for webcam, or use video file path
     
     # Option 2: Process video file
     # video_path = "path/to/your/video.mp4"

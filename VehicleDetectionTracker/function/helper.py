@@ -1,5 +1,4 @@
 import math
-from .paddleocr_wrapper import create_paddleocr_reader
 
 # license plate type classification helper function
 def linear_equation(x1, y1, x2, y2):
@@ -11,48 +10,6 @@ def check_point_linear(x, y, x1, y1, x2, y2):
     a, b = linear_equation(x1, y1, x2, y2)
     y_pred = a*x+b
     return(math.isclose(y_pred, y, abs_tol = 3))
-
-# detect character and number in license plate using PaddleOCR
-def read_plate(paddleocr_reader, im):
-    """
-    Đọc biển số xe sử dụng PaddleOCR thay vì YOLO
-    
-    Args:
-        paddleocr_reader: PaddleOCR reader instance
-        im: Input image
-        
-    Returns:
-        str: Biển số xe được nhận dạng
-    """
-    try:
-        # Sử dụng PaddleOCR để đọc text
-        license_plate = paddleocr_reader.read_license_plate(im)
-        
-        # Nếu không đọc được, thử với các góc xoay khác nhau
-        if license_plate == "unknown":
-            import cv2
-            import numpy as np
-            
-            # Thử xoay ảnh các góc khác nhau
-            angles = [90, 180, 270]
-            for angle in angles:
-                # Xoay ảnh
-                height, width = im.shape[:2]
-                center = (width // 2, height // 2)
-                rotation_matrix = cv2.getRotationMatrix2D(center, angle, 1.0)
-                rotated_im = cv2.warpAffine(im, rotation_matrix, (width, height))
-                
-                # Thử đọc với ảnh đã xoay
-                rotated_text = paddleocr_reader.read_license_plate(rotated_im)
-                if rotated_text != "unknown":
-                    license_plate = rotated_text
-                    break
-        
-        return license_plate
-        
-    except Exception as e:
-        print(f"ERROR: Error reading license plate with PaddleOCR: {e}")
-        return "unknown"
 
 # Legacy function để tương thích với code cũ (sử dụng YOLO)
 def read_plate_yolo(yolo_license_plate, im):

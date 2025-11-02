@@ -24,6 +24,12 @@ import os
 import pandas as pd
 from VehicleDetectionTracker.function.paddleocr_wrapper import create_paddleocr_reader
 from VehicleDetectionTracker.function import utils_rotate, helper
+from VehicleDetectionTracker.plate_utils import (
+    initialize_plate_detector,
+    preprocess_plate_image,
+    detect_license_plate_sync,
+    detect_license_plate_async,
+)
 
 
 class VehicleDetectionTracker:
@@ -246,17 +252,11 @@ class VehicleDetectionTracker:
         Initialize the license plate detector model.
         Downloads the model if not present.
         """
+        # Use centralized initializer in plate_utils
         try:
-            self.plate_model = torch.hub.load(
-                "yolov5",
-                "custom",
-                path="model/LP_detector.pt",
-                force_reload=False,  # Changed to False to avoid reloading each time
-                source="local",
-            )
-
+            self.plate_model = initialize_plate_detector("model/LP_detector.pt")
         except Exception as e:
-            print(f"Error loading license plate model: {str(e)}")
+            print(f"Error loading license plate model: {e}")
             self.plate_model = None
 
     def _preprocess_plate_image(self, plate_image):
@@ -269,26 +269,7 @@ class VehicleDetectionTracker:
         Returns:
             numpy.ndarray: Preprocessed image
         """
-        try:
-            # Convert to grayscale
-            gray = cv2.cvtColor(plate_image, cv2.COLOR_BGR2GRAY)
-
-            # Apply adaptive thresholding
-            thresh = cv2.adaptiveThreshold(
-                gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 2
-            )
-
-            # Denoise the image
-            denoised = cv2.fastNlMeansDenoising(thresh)
-
-            # Apply dilation to make the text thicker
-            kernel = np.ones((1, 1), np.uint8)
-            dilated = cv2.dilate(denoised, kernel, iterations=1)
-
-            return dilated
-        except Exception as e:
-            print(f"Error in plate image preprocessing: {str(e)}")
-            return plate_image
+        return preprocess_plate_image(plate_image)
 
     def _detect_license_plate(self, vehicle_frame):
         """
@@ -300,81 +281,20 @@ class VehicleDetectionTracker:
         Returns:
             dict: Dictionary containing license plate text, confidence score, and coordinates.
         """
-        try:
-            if self.plate_model is None:
-                return {"text": None, "bbox": None}
-
-            # Detect license plate in the vehicle frame (thread-safe)
-            with self._model_lock:
-                results = self.plate_model(vehicle_frame, size=640)
-            print(
-                "License plate detection results:", results
-            )  # Debug line to print results
-
-            # YOLOv5 results format
-            if not results.pred[0].shape[0]:  # No detections
-                return {"text": None, "bbox": None}
-
-            # Get detection with highest confidence
-            pred = results.pred[0]  # First image predictions
-            best_det_idx = pred[:, 4].argmax()  # Index of highest confidence detection
-            best_det = pred[best_det_idx]
-
-            # Extract coordinates and confidence
-            x1, y1, x2, y2 = map(int, best_det[:4].tolist())
-
-            length_plate = x2 - x1
-            print(f"Length of plate: {length_plate}")
-            if length_plate < 40:
-                return {"text": None, "bbox": None}
-
-            # Extract the license plate region
-            plate_image = vehicle_frame[y1:y2, x1:x2]
-            cv2.imwrite("plate_image.jpg", plate_image)
-
-            if plate_image.size == 0:
-                return {"text": None, "bbox": None}
-
-            # Initialize OCR if needed
-            if self.ocr_reader is None:
-                self._initialize_ocr_reader()
-
-            # Perform OCR on the processed plate image (sequential - old way)
-            lp = "unknown"
-            flag = 0
-            for cc in range(0, 2):
-                for ct in range(0, 2):
-                    with self._model_lock:
-                        lp = helper.read_plate(
-                            self.ocr_reader, utils_rotate.deskew(plate_image, cc, ct)
-                        )
-                    print(f"Trying rotation cc={cc}, ct={ct}: Detected plate: {lp}")
-                    if lp != "unknown" and lp is not None:
-                        flag = 1
-                        break
-                if flag == 1:
-                    break
-
-            return {"text": lp, "bbox": (x1, y1, x2, y2)}
-
-        except Exception as e:
-            print(f"Error in license plate detection: {str(e)}")
-            return {"text": None, "bbox": None}
+        # Delegate to plate_utils synchronous detector
+        return detect_license_plate_sync(self.plate_model, vehicle_frame, self.ocr_reader, self._model_lock)
 
     async def _ocr_attempt(self, ocr_reader, plate_image, cc, ct):
         """
         Single OCR attempt with rotation parameters.
         Wrapped in async to allow parallel execution.
         """
+        # This method is now handled in plate_utils (used by async detector). Keep wrapper for compatibility.
         loop = asyncio.get_event_loop()
-        # Deskew is just image processing, no need for lock
         rotated_image = utils_rotate.deskew(plate_image, cc, ct)
-        # OCR reading needs lock for thread safety
         with self._model_lock:
-            lp = await loop.run_in_executor(
-                self._executor, 
-                lambda: helper.read_plate(ocr_reader, rotated_image)
-            )
+            # lp = await loop.run_in_executor(self._executor, lambda: helper.read_plate(ocr_reader, rotated_image))
+            lp = await loop.run_in_executor(self._executor, lambda: ocr_reader.read_license_plate(rotated_image))
         return lp, cc, ct
 
     async def _detect_license_plate_async(self, vehicle_frame):
@@ -388,71 +308,8 @@ class VehicleDetectionTracker:
         Returns:
             dict: Dictionary containing license plate text, confidence score, and coordinates.
         """
-        try:
-            if self.plate_model is None:
-                return {"text": None, "bbox": None}
-
-            # Detect license plate in the vehicle frame (thread-safe)
-            loop = asyncio.get_event_loop()
-            with self._model_lock:
-                results = await loop.run_in_executor(
-                    self._executor,
-                    lambda: self.plate_model(vehicle_frame, size=640)
-                )
-            print("License plate detection results:", results)
-
-            # YOLOv5 results format
-            if not results.pred[0].shape[0]:  # No detections
-                return {"text": None, "bbox": None}
-
-            # Get detection with highest confidence
-            pred = results.pred[0]  # First image predictions
-            best_det_idx = pred[:, 4].argmax()  # Index of highest confidence detection
-            best_det = pred[best_det_idx]
-
-            # Extract coordinates and confidence
-            x1, y1, x2, y2 = map(int, best_det[:4].tolist())
-
-            length_plate = x2 - x1
-            print(f"Length of plate: {length_plate}")
-            if length_plate < 40:
-                return {"text": None, "bbox": None}
-
-            # Extract the license plate region
-            plate_image = vehicle_frame[y1:y2, x1:x2]
-            cv2.imwrite("plate_image.jpg", plate_image)
-
-            if plate_image.size == 0:
-                return {"text": None, "bbox": None}
-
-            # Initialize OCR if needed
-            if self.ocr_reader is None:
-                self._initialize_ocr_reader()
-
-            # Perform OCR attempts in parallel
-            tasks = []
-            for cc in range(0, 2):
-                for ct in range(0, 2):
-                    tasks.append(self._ocr_attempt(self.ocr_reader, plate_image, cc, ct))
-
-            # Wait for all OCR attempts, return first successful result
-            lp = "unknown"
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            
-            for result in results:
-                if isinstance(result, Exception):
-                    continue
-                result_lp, cc, ct = result
-                print(f"Trying rotation cc={cc}, ct={ct}: Detected plate: {result_lp}")
-                if result_lp != "unknown" and result_lp is not None:
-                    lp = result_lp
-                    break  # Use first successful result
-
-            return {"text": lp, "bbox": (x1, y1, x2, y2)}
-
-        except Exception as e:
-            print(f"Error in async license plate detection: {str(e)}")
-            return {"text": None, "bbox": None}
+        # Delegate to plate_utils async detector
+        return await detect_license_plate_async(self.plate_model, vehicle_frame, self.ocr_reader, self._executor, self._model_lock)
 
     def _map_direction_to_label(self, direction):
         # Define direction ranges in radians and their corresponding labels
