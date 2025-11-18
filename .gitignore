@@ -4,6 +4,7 @@ build/
 *.egg-info/
 yolov5/
 
+*.xlsx
 # Python cache files (no need to include them)
 __pycache__/
 

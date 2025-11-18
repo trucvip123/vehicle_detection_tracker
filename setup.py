@@ -12,8 +12,6 @@ setup(
         "ultralytics==8.0.145",
         "tensorflow==2.14.0",
     ],
-    author="Sergio Sánchez Sánchez",
-    author_email="dreamsoftware92@gmail.com",
     description='VehicleDetectionTracker 🚗: Effortlessly track and detect vehicles in images and videos with advanced algorithms. 🚙🚕 Boost your computer vision project!" 🔍📹',
     url="https://github.com/sergio11/vehicle_detection_tracker",
     keywords=[

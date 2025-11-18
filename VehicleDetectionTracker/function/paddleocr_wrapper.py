@@ -305,12 +305,17 @@ class PaddleOCRWrapper:
         unique_results = {}
         print("text_results:", text_results)
         for text, confidence in text_results:
-            if text not in unique_results or unique_results[text] < confidence:
+            if text not in unique_results and confidence > 0.5:
                 unique_results[text] = confidence
 
         unique_texts = list(unique_results.keys())
         print(f"DEBUG: All OCR results: {unique_texts}")
-
+        if len(unique_texts) == 0:
+            return None
+        elif len(unique_texts) == 1:
+            license_plate = unique_texts[0]
+            if len(license_plate) < 7:
+                return None
         return self.merge_ocr_results(unique_texts)
 
         """

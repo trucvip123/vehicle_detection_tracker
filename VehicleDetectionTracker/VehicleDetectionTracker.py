@@ -34,7 +34,7 @@ from VehicleDetectionTracker.plate_utils import (
 
 class VehicleDetectionTracker:
 
-    def __init__(self, model_path="yolov8n.pt", excel_output_path="vehicle_data.xlsx", initialize_all_models=True):
+    def __init__(self, model_path="yolov8n.pt", excel_output_path="vehicle_data.xlsx", initialize_all_models=True, stream_frame_size=None):
         """
         Initialize the VehicleDetection class.
 
@@ -75,6 +75,10 @@ class VehicleDetectionTracker:
             print("⚠ OCR reader will be initialized on first use (lazy loading)")
         
         self.text_plate = None
+        # Optional target frame size for resizing streaming/video frames.
+        # Should be a tuple (width, height) or None to disable resizing.
+        # Example: stream_frame_size=(640, 480)
+        self.stream_frame_size = stream_frame_size
         
         # Thread pool for async operations
         self._executor = ThreadPoolExecutor(max_workers=4)
@@ -876,6 +880,14 @@ class VehicleDetectionTracker:
         while cap.isOpened():
             success, frame = cap.read()
             if success:
+                # Optionally resize the frame to reduce processing cost
+                if self.stream_frame_size and frame is not None:
+                    try:
+                        # cv2.resize expects size as (width, height)
+                        frame = cv2.resize(frame, self.stream_frame_size, interpolation=cv2.INTER_AREA)
+                    except Exception:
+                        # If resizing fails for any reason, continue with original frame
+                        pass
                 frame_rate = int(cap.get(cv2.CAP_PROP_FPS))
                 print(f"Frame rate: {frame_rate} FPS")
                 timestamp = datetime.now()
@@ -1270,15 +1282,22 @@ class VehicleDetectionTracker:
                 success, frame = cap.read()
                 if not success:
                     break
-                
+
+                # Optionally resize the frame to reduce processing cost
+                if self.stream_frame_size and frame is not None:
+                    try:
+                        frame = cv2.resize(frame, self.stream_frame_size, interpolation=cv2.INTER_AREA)
+                    except Exception:
+                        pass
+
                 timestamp = datetime.now()
-                
+
                 # Fast processing (no blocking OCR)
                 display_frame = self.process_frame_streaming(frame, timestamp)
-                
+
                 if display_window:
                     cv2.imshow("Vehicle Detection - Streaming Mode", display_frame)
-                
+
                 # Break on 'q' key
                 if cv2.waitKey(1) & 0xFF == ord("q"):
                     break
