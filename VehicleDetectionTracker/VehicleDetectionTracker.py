@@ -11,12 +11,7 @@ import torch
 from ultralytics import YOLO
 import numpy as np
 from ultralytics.utils.plotting import colors
-# from VehicleDetectionTracker.color_classifier.classifier import (
-#     Classifier as ColorClassifier,
-# )
-# from VehicleDetectionTracker.model_classifier.classifier import (
-#     Classifier as ModelClassifier,
-# )
+
 from datetime import datetime
 import easyocr
 import requests
@@ -30,6 +25,7 @@ from VehicleDetectionTracker.plate_utils import (
     detect_license_plate_sync,
     detect_license_plate_async,
 )
+from VehicleDetectionTracker.utils.send_bot import send_order_to_telegram
 
 
 class VehicleDetectionTracker:
@@ -1001,6 +997,8 @@ class VehicleDetectionTracker:
                 # Update last seen timestamp
                 if timestamp:
                     self.vehicle_last_seen[track_id] = timestamp
+                print("Sending order to Telegram...")
+                await send_order_to_telegram(plate_text, direction_label, timestamp)
         except Exception as e:
             print(f"Background plate detection error for vehicle {track_id}: {e}")
 
@@ -1040,6 +1038,9 @@ class VehicleDetectionTracker:
                 # Update last seen timestamp
                 if timestamp:
                     self.vehicle_last_seen[track_id] = timestamp
+
+                print("Sending order to Telegram...")
+                send_order_to_telegram(plate_text, direction_label, timestamp)
         except Exception as e:
             print(f"Background plate detection error for vehicle {track_id}: {e}")
 

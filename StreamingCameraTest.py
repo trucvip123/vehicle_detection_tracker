@@ -13,7 +13,7 @@ def main():
     print("Starting camera stream... (Press 'q' to quit)")
     RTSP_SOURCE = "rtsp://admin:MOVYKV@aicamera.ddns.net:554/Streaming/Channels/101" 
     VIDEO_SOURCE = r"F:\OCR\License-Plate-Recognition\video\4.mp4"
-    tracker.process_video_streaming(RTSP_SOURCE)  # 0 for webcam, or use video file path
+    tracker.process_video_streaming(VIDEO_SOURCE)  # 0 for webcam, or use video file path
     
     # Cleanup
     tracker.cleanup()
