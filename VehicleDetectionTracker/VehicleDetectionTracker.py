@@ -25,7 +25,7 @@ from VehicleDetectionTracker.plate_utils import (
     detect_license_plate_sync,
     detect_license_plate_async,
 )
-from VehicleDetectionTracker.utils.send_bot import send_order_to_telegram
+from VehicleDetectionTracker.utils.send_bot import send_notify_to_telegram
 
 
 class VehicleDetectionTracker:
@@ -92,6 +92,8 @@ class VehicleDetectionTracker:
         self.vehicle_last_seen = {}  # {track_id: timestamp}
         # Track number of consecutive frames vehicle has been missing
         self.vehicle_missing_frames = {}  # {track_id: missing_frame_count}
+        # Track which vehicles have already sent Telegram notifications (send only once per ID)
+        self.vehicle_telegram_sent = set()  # {track_id}
         # Excel output file path
         self.excel_output_path = excel_output_path
         # Lock for Excel file operations
@@ -284,18 +286,18 @@ class VehicleDetectionTracker:
         # Delegate to plate_utils synchronous detector
         return detect_license_plate_sync(self.plate_model, vehicle_frame, self.ocr_reader, self._model_lock)
 
-    async def _ocr_attempt(self, ocr_reader, plate_image, cc, ct):
-        """
-        Single OCR attempt with rotation parameters.
-        Wrapped in async to allow parallel execution.
-        """
-        # This method is now handled in plate_utils (used by async detector). Keep wrapper for compatibility.
-        loop = asyncio.get_event_loop()
-        rotated_image = utils_rotate.deskew(plate_image, cc, ct)
-        with self._model_lock:
-            # lp = await loop.run_in_executor(self._executor, lambda: helper.read_plate(ocr_reader, rotated_image))
-            lp = await loop.run_in_executor(self._executor, lambda: ocr_reader.read_license_plate(rotated_image))
-        return lp, cc, ct
+    # async def _ocr_attempt(self, ocr_reader, plate_image, cc, ct):
+    #     """
+    #     Single OCR attempt with rotation parameters.
+    #     Wrapped in async to allow parallel execution.
+    #     """
+    #     # This method is now handled in plate_utils (used by async detector). Keep wrapper for compatibility.
+    #     loop = asyncio.get_event_loop()
+    #     rotated_image = utils_rotate.deskew(plate_image, cc, ct)
+    #     with self._model_lock:
+    #         # lp = await loop.run_in_executor(self._executor, lambda: helper.read_plate(ocr_reader, rotated_image))
+    #         lp = await loop.run_in_executor(self._executor, lambda: ocr_reader.read_license_plate(rotated_image))
+    #     return lp, cc, ct
 
     async def _detect_license_plate_async(self, vehicle_frame):
         """
@@ -997,8 +999,14 @@ class VehicleDetectionTracker:
                 # Update last seen timestamp
                 if timestamp:
                     self.vehicle_last_seen[track_id] = timestamp
-                print("Sending order to Telegram...")
-                await send_order_to_telegram(plate_text, direction_label, timestamp)
+                
+                # Send Telegram notification only once per vehicle ID
+                if track_id not in self.vehicle_telegram_sent:
+                    print(f"Sending Telegram notification for vehicle {track_id}...")
+                    # send_notify_to_telegram is synchronous; run it in a thread so
+                    # awaiting here does not try to await a non-awaitable object.
+                    await asyncio.to_thread(send_notify_to_telegram, plate_text, direction_label, timestamp)
+                    self.vehicle_telegram_sent.add(track_id)
         except Exception as e:
             print(f"Background plate detection error for vehicle {track_id}: {e}")
 
@@ -1039,8 +1047,11 @@ class VehicleDetectionTracker:
                 if timestamp:
                     self.vehicle_last_seen[track_id] = timestamp
 
-                print("Sending order to Telegram...")
-                send_order_to_telegram(plate_text, direction_label, timestamp)
+                # Send Telegram notification only once per vehicle ID
+                if track_id not in self.vehicle_telegram_sent:
+                    print(f"Sending Telegram notification for vehicle {track_id}...")
+                    send_notify_to_telegram(plate_text, direction_label, timestamp)
+                    self.vehicle_telegram_sent.add(track_id)
         except Exception as e:
             print(f"Background plate detection error for vehicle {track_id}: {e}")
 
