@@ -1,4 +1,3 @@
-import json
 import math
 import cv2
 import base64
@@ -7,18 +6,14 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import threading
 
-import torch
 from ultralytics import YOLO
 import numpy as np
 from ultralytics.utils.plotting import colors
 
 from datetime import datetime
-import easyocr
-import requests
 import os
 import pandas as pd
 from VehicleDetectionTracker.function.paddleocr_wrapper import create_paddleocr_reader
-from VehicleDetectionTracker.function import utils_rotate, helper
 from VehicleDetectionTracker.plate_utils import (
     initialize_plate_detector,
     preprocess_plate_image,

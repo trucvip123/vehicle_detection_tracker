@@ -1,0 +1,31 @@
+# Core Computer Vision Libraries
+opencv-python
+imutils
+numpy
+
+# Deep Learning Frameworks
+torch
+torchvision
+ultralytics
+tensorflow
+
+# Tracking dependencies for ultralytics
+lap  # Linear Assignment Problem solver for BYTETracker
+filterpy  # Kalman filter for tracking (if using other trackers)
+
+# OCR Libraries
+paddlepaddle
+paddleocr
+paddlex
+Pillow
+
+# Data Processing
+pandas
+openpyxl
+
+# HTTP Requests (for Telegram bot)
+requests
+
+# YOLOv5 for license plate detection
+# YOLOv5 will be loaded via torch.hub from local yolov5 repository
+# Ensure yolov5 folder exists in the project root or install separately if needed
