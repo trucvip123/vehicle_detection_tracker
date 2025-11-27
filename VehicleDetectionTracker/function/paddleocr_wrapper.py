@@ -8,6 +8,10 @@ import numpy as np
 from paddleocr import PaddleOCR
 import re
 import collections
+import logging
+
+# Module logger
+logger = logging.getLogger(__name__)
 
 
 class PaddleOCRWrapper:
@@ -285,6 +289,9 @@ class PaddleOCRWrapper:
         # Làm sạch định dạng kiểu 77A33151 -> 77A-331.51
         plate = re.sub(r"^(\d{2}[A-Z])[- ]?(\d{3})(\d{2})$", r"\1-\2.\3", plate)
         if len(plate) < 7:
+            print("merge_ocr_results returning None due to short length: %s", plate)
+            return None
+        if '-' not in plate:
             return None
         return plate
 
@@ -315,6 +322,10 @@ class PaddleOCRWrapper:
         elif len(unique_texts) == 1:
             license_plate = unique_texts[0]
             if len(license_plate) < 7:
+                return None
+            # Check if the first character is a digit (biển số xe VN phải bắt đầu bằng số)
+            if not license_plate[0].isdigit() or not license_plate[1].isdigit() or license_plate[2].isdigit():
+                print(f"DEBUG: License plate does not format license plate: {license_plate}")
                 return None
         return self.merge_ocr_results(unique_texts)
 
