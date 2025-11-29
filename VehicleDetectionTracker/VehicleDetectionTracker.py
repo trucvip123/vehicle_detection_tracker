@@ -377,541 +377,6 @@ class VehicleDetectionTracker:
         kmph = meters_per_second * 3.6
         return kmph
 
-    def process_frame_base64(self, frame_base64, frame_timestamp):
-        """
-        Process a base64-encoded frame to detect and track vehicles.
-
-        Args:
-            frame_base64 (str): Base64-encoded input frame for processing.
-
-        Returns:
-            dict or None: Processed information including tracked vehicles' details and the annotated frame in base64,
-            or an error message if decoding fails.
-        """
-        frame = self._decode_image_base64(frame_base64)
-        if frame is not None:
-            return self.process_frame(frame, frame_timestamp)
-        else:
-            return {"error": "Failed to decode the base64 image"}
-
-    def process_frame(self, frame, frame_timestamp):
-        """
-        Process a single video frame to detect and track vehicles.
-
-        Args:
-            frame (numpy.ndarray): Input frame for processing.
-
-        Returns:
-            dict: Processed information including tracked vehicles' details, the annotated frame in base64, and the original frame in base64.
-        """
-        self._initialize_classifiers()
-        response = {
-            "number_of_vehicles_detected": 0,  # Counter for vehicles detected in this frame
-            "detected_vehicles": [],  # List of information about detected vehicles
-            "annotated_frame_base64": None,  # Annotated frame as a base64 encoded image
-            "original_frame_base64": None,  # Original frame as a base64 encoded image
-        }
-        # Process a single video frame and return detection results, an annotated frame, and the original frame as base64.
-        results = self.model.track(
-            self._increase_brightness(frame), persist=True, tracker="bytetrack.yaml", verbose=False
-        )  # Perform vehicle tracking in the frame
-        if (
-            results is not None
-            and results[0] is not None
-            and results[0].boxes is not None
-            and results[0].boxes.id is not None
-        ):
-            # Obtain bounding boxes (xywh format) of detected objects
-            boxes = results[0].boxes.xywh.cpu()
-            # Extract confidence scores for each detected object
-            conf_list = results[0].boxes.conf.cpu()
-            # Get unique IDs assigned to each tracked object
-            track_ids = results[0].boxes.id.int().cpu().tolist()
-            # Obtain the class labels (e.g., 'car', 'truck') for detected objects
-            clss = results[0].boxes.cls.cpu().tolist()
-            # Retrieve the names of the detected objects based on class labels
-            names = results[0].names
-            # Get the annotated frame using results[0].plot() and encode it as base64
-            annotated_frame = results[0].plot()
-
-            for box, track_id, cls, conf in zip(boxes, track_ids, clss, conf_list):
-                x, y, w, h = box
-                label = str(names[cls])
-                # Bounding box plot
-                bbox_color = colors(cls, True)
-                track_thickness = 2
-                if track_id not in self.track_history:
-                    self.track_history[track_id] = []
-                # Retrieve or create a list to store the tracking history of the current vehicle (identified by track_id).
-                track = self.track_history[track_id]
-                # Append the current position (x, y) to the tracking history list.
-                track.append((float(x), float(y)))
-                # Limit the tracking history to the last 30 positions to avoid excessive memory usage.
-                max_history_length = 30
-                if len(track) > max_history_length:
-                    track.pop(0)
-                # Combine the tracked points into a NumPy array for drawing a polyline.
-                points = np.hstack(track).astype(np.int32).reshape((-1, 1, 2))
-                # Draw a polyline (tracking lines) on the annotated frame using the combined points.
-                cv2.polylines(
-                    annotated_frame,
-                    [points],
-                    isClosed=False,
-                    color=bbox_color,
-                    thickness=track_thickness,
-                )
-
-                if track_id not in self.vehicle_timestamps:
-                    self.vehicle_timestamps[track_id] = {
-                        "timestamps": [],
-                        "positions": [],
-                    }  # Initialize timestamps and positions lists
-
-                # Store the timestamp for this frame
-                self.vehicle_timestamps[track_id]["timestamps"].append(frame_timestamp)
-                self.vehicle_timestamps[track_id]["positions"].append((x, y))
-                # Calculate the speed if there are enough timestamps (at least 2)
-                timestamps = self.vehicle_timestamps[track_id]["timestamps"]
-                positions = self.vehicle_timestamps[track_id]["positions"]
-                speed_kph = None
-                reliability = 0.0
-                direction_label = None
-                direction = None
-                if len(timestamps) >= 2:
-                    delta_t_list = []
-                    distance_list = []
-                    # Calculate time intervals (delta_t) and distances traveled between successive frames
-                    for i in range(1, len(timestamps)):
-                        t1, t2 = timestamps[i - 1], timestamps[i]
-                        delta_t = t2.timestamp() - t1.timestamp()
-                        if delta_t > 0:
-                            x1, y1 = positions[i - 1]
-                            x2, y2 = positions[i]
-                            distance = math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
-                            delta_t_list.append(delta_t)
-                            distance_list.append(distance)
-
-                    # Calculate speeds in meters per second (mps) for each frame and then average them
-                    speeds = [
-                        distance / delta_t
-                        for distance, delta_t in zip(distance_list, delta_t_list)
-                    ]
-                    if len(speeds) > 0:
-                        avg_speed_mps = sum(speeds) / len(speeds)
-                    else:
-                        avg_speed_mps = None
-
-                    # Convert the average speed from meters per second (mps) to kilometers per hour (kph)
-                    if avg_speed_mps is not None:
-                        speed_kph = self._convert_meters_per_second_to_kmph(
-                            avg_speed_mps
-                        )
-                    else:
-                        speed_kph = None
-                    # Calculate the direction based on the change in position between the first and last frame
-                    initial_x, initial_y = positions[0]
-                    final_x, final_y = positions[-1]
-                    direction = math.atan2(final_y - initial_y, final_x - initial_x)
-                    direction_label = self._map_direction_to_label(direction)
-
-                    # Calculate reliability based on the number of samples used
-                    if len(timestamps) < 5:
-                        reliability = (
-                            0.5  # Low reliability if there are less than 5 samples
-                        )
-                    elif len(timestamps) < 10:
-                        reliability = 0.7  # Moderate reliability if there are between 5 and 10 samples
-                    else:
-                        reliability = (
-                            1.0  # High reliability if there are 10 or more samples
-                        )
-
-                # If the vehicle is new, process it
-                self.detected_vehicles.add(
-                    track_id
-                )  # Add the vehicle to the set of detected vehicles
-                response["number_of_vehicles_detected"] += 1  # Increment the counter
-
-                # Extract the frame of the detected vehicle
-                vehicle_frame = frame[
-                    int(y - h / 2) : int(y + h / 2), int(x - w / 2) : int(x + w / 2)
-                ]
-                vehicle_frame_base64 = self._encode_image_base64(vehicle_frame)
-                # color_info = self.color_classifier.predict(vehicle_frame)
-                # color_info_json = json.dumps(color_info)
-                # model_info = self.model_classifier.predict(vehicle_frame)
-                # model_info_json = json.dumps(model_info)
-                # Detect license plate
-                license_plate_info = self._detect_license_plate(vehicle_frame)
-
-                # Draw license plate box and text on annotated frame if detected
-                if license_plate_info["bbox"] is not None:
-                    x1, y1, x2, y2 = license_plate_info["bbox"]
-                    # Adjust coordinates to vehicle frame position
-                    abs_x1 = int(x - w / 2 + x1)
-                    abs_y1 = int(y - h / 2 + y1)
-                    abs_x2 = int(x - w / 2 + x2)
-                    abs_y2 = int(y - h / 2 + y2)
-
-                    # Draw rectangle around license plate
-                    cv2.rectangle(
-                        annotated_frame,
-                        (abs_x1, abs_y1),
-                        (abs_x2, abs_y2),
-                        (0, 255, 0),
-                        2,
-                    )
-
-                    # Add text if detected
-                    if license_plate_info["text"]:
-                        text = license_plate_info["text"]
-                        if len(text) > 6:
-                            self.text_plate = text
-                        cv2.putText(
-                            annotated_frame,
-                            f"{self.text_plate}",
-                            (abs_x1, abs_y1 - 10),
-                            cv2.FONT_HERSHEY_SIMPLEX,
-                            1,
-                            (0, 0, 255),
-                            2,
-                        )
-
-                # Add vehicle information to the response
-                response["detected_vehicles"].append(
-                    {
-                        "vehicle_id": track_id,
-                        # "vehicle_type": label,
-                        # "detection_confidence": conf.item(),
-                        "vehicle_coordinates": {
-                            "x": x.item(),
-                            "y": y.item(),
-                            "width": w.item(),
-                            "height": h.item(),
-                        },
-                        "vehicle_frame_base64": vehicle_frame_base64,
-                        "vehicle_frame_timestamp": frame_timestamp,
-                        # "color_info": color_info_json,
-                        # "model_info": model_info_json,
-                        "speed_info": {
-                            "kph": speed_kph,
-                            "reliability": reliability,
-                            "direction_label": direction_label,
-                            "direction": direction,
-                        },
-                        "license_plate_info": {
-                            "text": license_plate_info["text"],
-                        },
-                    }
-                )
-
-            annotated_frame_base64 = self._encode_image_base64(annotated_frame)
-            response["annotated_frame_base64"] = annotated_frame_base64
-
-        # Encode the original frame as base64
-        original_frame_base64 = self._encode_image_base64(frame)
-        response["original_frame_base64"] = original_frame_base64
-
-        return response
-
-    async def _process_single_vehicle_async(
-        self, box, track_id, cls, conf, frame, annotated_frame, frame_timestamp, names
-    ):
-        """
-        Async helper to process a single vehicle (license plate detection).
-        Used for parallel processing of multiple vehicles.
-        """
-        x, y, w, h = box
-        label = str(names[cls])
-        bbox_color = colors(cls, True)
-
-        # Extract the frame of the detected vehicle
-        vehicle_frame = frame[
-            int(y - h / 2) : int(y + h / 2), int(x - w / 2) : int(x + w / 2)
-        ]
-
-        # Detect license plate asynchronously
-        license_plate_info = await self._detect_license_plate_async(vehicle_frame)
-
-        return {
-            "track_id": track_id,
-            "box": (x, y, w, h),
-            "label": label,
-            "bbox_color": bbox_color,
-            "vehicle_frame": vehicle_frame,
-            "license_plate_info": license_plate_info,
-        }
-
-    async def process_frame_async(self, frame, frame_timestamp):
-        """
-        Async version: Process a single video frame to detect and track vehicles.
-        Uses parallel processing for license plate detection across multiple vehicles.
-
-        Args:
-            frame (numpy.ndarray): Input frame for processing.
-            frame_timestamp (datetime): Timestamp of the frame.
-
-        Returns:
-            dict: Processed information including tracked vehicles' details, the annotated frame in base64, and the original frame in base64.
-        """
-        self._initialize_classifiers()
-        response = {
-            "number_of_vehicles_detected": 0,
-            "detected_vehicles": [],
-            "annotated_frame_base64": None,
-            "original_frame_base64": None,
-        }
-
-        # Process frame for vehicle tracking (sync operation)
-        loop = asyncio.get_event_loop()
-        brightened_frame = self._increase_brightness(frame)
-        results = await loop.run_in_executor(
-            self._executor,
-            lambda: self.model.track(brightened_frame, persist=True, tracker="bytetrack.yaml", verbose=False)
-        )
-
-        if (
-            results is not None
-            and results[0] is not None
-            and results[0].boxes is not None
-            and results[0].boxes.id is not None
-        ):
-            boxes = results[0].boxes.xywh.cpu()
-            conf_list = results[0].boxes.conf.cpu()
-            track_ids = results[0].boxes.id.int().cpu().tolist()
-            clss = results[0].boxes.cls.cpu().tolist()
-            names = results[0].names
-            annotated_frame = results[0].plot()
-
-            # Collect all vehicle data first (for tracking history)
-            vehicle_data_list = []
-            for box, track_id, cls, conf in zip(boxes, track_ids, clss, conf_list):
-                x, y, w, h = box
-                
-                # Update tracking history
-                if track_id not in self.track_history:
-                    self.track_history[track_id] = []
-                track = self.track_history[track_id]
-                track.append((float(x), float(y)))
-                max_history_length = 30
-                if len(track) > max_history_length:
-                    track.pop(0)
-                
-                # Draw tracking line
-                points = np.hstack(track).astype(np.int32).reshape((-1, 1, 2))
-                bbox_color = colors(cls, True)
-                cv2.polylines(
-                    annotated_frame,
-                    [points],
-                    isClosed=False,
-                    color=bbox_color,
-                    thickness=2,
-                )
-
-                # Update timestamps and calculate speed
-                if track_id not in self.vehicle_timestamps:
-                    self.vehicle_timestamps[track_id] = {
-                        "timestamps": [],
-                        "positions": [],
-                    }
-
-                self.vehicle_timestamps[track_id]["timestamps"].append(frame_timestamp)
-                self.vehicle_timestamps[track_id]["positions"].append((x, y))
-                
-                timestamps = self.vehicle_timestamps[track_id]["timestamps"]
-                positions = self.vehicle_timestamps[track_id]["positions"]
-                
-                speed_kph = None
-                reliability = 0.0
-                direction_label = None
-                direction = None
-                
-                if len(timestamps) >= 2:
-                    delta_t_list = []
-                    distance_list = []
-                    for i in range(1, len(timestamps)):
-                        t1, t2 = timestamps[i - 1], timestamps[i]
-                        delta_t = t2.timestamp() - t1.timestamp()
-                        if delta_t > 0:
-                            x1, y1 = positions[i - 1]
-                            x2, y2 = positions[i]
-                            distance = math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
-                            delta_t_list.append(delta_t)
-                            distance_list.append(distance)
-
-                    speeds = [
-                        distance / delta_t
-                        for distance, delta_t in zip(distance_list, delta_t_list)
-                    ]
-                    if len(speeds) > 0:
-                        avg_speed_mps = sum(speeds) / len(speeds)
-                        speed_kph = self._convert_meters_per_second_to_kmph(avg_speed_mps)
-                    
-                    initial_x, initial_y = positions[0]
-                    final_x, final_y = positions[-1]
-                    direction = math.atan2(final_y - initial_y, final_x - initial_x)
-                    direction_label = self._map_direction_to_label(direction)
-
-                    if len(timestamps) < 5:
-                        reliability = 0.5
-                    elif len(timestamps) < 10:
-                        reliability = 0.7
-                    else:
-                        reliability = 1.0
-
-                vehicle_data_list.append({
-                    "box": (x, y, w, h),
-                    "track_id": track_id,
-                    "cls": cls,
-                    "conf": conf,
-                    "speed_kph": speed_kph,
-                    "reliability": reliability,
-                    "direction_label": direction_label,
-                    "direction": direction,
-                })
-
-            # Process all vehicles in parallel (license plate detection)
-            tasks = []
-            for vehicle_data in vehicle_data_list:
-                x, y, w, h = vehicle_data["box"]
-                vehicle_frame = frame[
-                    int(y - h / 2) : int(y + h / 2), int(x - w / 2) : int(x + w / 2)
-                ]
-                tasks.append(
-                    self._detect_license_plate_async(vehicle_frame)
-                )
-
-            # Wait for all license plate detections
-            license_plate_results = await asyncio.gather(*tasks, return_exceptions=True)
-
-            # Build response with results
-            for vehicle_data, license_plate_info in zip(vehicle_data_list, license_plate_results):
-                if isinstance(license_plate_info, Exception):
-                    print(f"Error in license plate detection: {license_plate_info}")
-                    license_plate_info = {"text": None, "bbox": None}
-
-                x, y, w, h = vehicle_data["box"]
-                track_id = vehicle_data["track_id"]
-                
-                self.detected_vehicles.add(track_id)
-                response["number_of_vehicles_detected"] += 1
-
-                vehicle_frame = frame[
-                    int(y - h / 2) : int(y + h / 2), int(x - w / 2) : int(x + w / 2)
-                ]
-                vehicle_frame_base64 = self._encode_image_base64(vehicle_frame)
-
-                # Draw license plate box and text if detected
-                if license_plate_info.get("bbox") is not None:
-                    x1, y1, x2, y2 = license_plate_info["bbox"]
-                    abs_x1 = int(x - w / 2 + x1)
-                    abs_y1 = int(y - h / 2 + y1)
-                    abs_x2 = int(x - w / 2 + x2)
-                    abs_y2 = int(y - h / 2 + y2)
-
-                    cv2.rectangle(
-                        annotated_frame,
-                        (abs_x1, abs_y1),
-                        (abs_x2, abs_y2),
-                        (0, 255, 0),
-                        2,
-                    )
-
-                    if license_plate_info.get("text"):
-                        text = license_plate_info["text"]
-                        if len(text) > 6:
-                            self.text_plate = text
-                        cv2.putText(
-                            annotated_frame,
-                            f"{self.text_plate}",
-                            (abs_x1, abs_y1 - 10),
-                            cv2.FONT_HERSHEY_SIMPLEX,
-                            1,
-                            (0, 0, 255),
-                            2,
-                        )
-
-                response["detected_vehicles"].append(
-                    {
-                        "vehicle_id": track_id,
-                        "vehicle_coordinates": {
-                            "x": x.item(),
-                            "y": y.item(),
-                            "width": w.item(),
-                            "height": h.item(),
-                        },
-                        "vehicle_frame_base64": vehicle_frame_base64,
-                        "vehicle_frame_timestamp": frame_timestamp,
-                        "speed_info": {
-                            "kph": vehicle_data["speed_kph"],
-                            "reliability": vehicle_data["reliability"],
-                            "direction_label": vehicle_data["direction_label"],
-                            "direction": vehicle_data["direction"],
-                        },
-                        "license_plate_info": {
-                            "text": license_plate_info.get("text"),
-                        },
-                    }
-                )
-
-            annotated_frame_base64 = self._encode_image_base64(annotated_frame)
-            response["annotated_frame_base64"] = annotated_frame_base64
-
-        # Encode the original frame as base64
-        original_frame_base64 = self._encode_image_base64(frame)
-        response["original_frame_base64"] = original_frame_base64
-
-        return response
-
-    def process_video(self, video_path, result_callback):
-        """
-        Process a video by calling a callback for each frame's results.
-
-        Args:
-            video_path (str): Path to the video file.
-            result_callback (function): A callback function to handle the processing results for each frame.
-        """
-        # Process a video frame by frame, calling a callback with the results.
-        cap = cv2.VideoCapture(video_path)
-
-        while cap.isOpened():
-            success, frame = cap.read()
-            if success:
-                # Optionally resize the frame to reduce processing cost
-                if self.stream_frame_size and frame is not None:
-                    try:
-                        # cv2.resize expects size as (width, height)
-                        frame = cv2.resize(frame, self.stream_frame_size, interpolation=cv2.INTER_AREA)
-                    except Exception:
-                        # If resizing fails for any reason, continue with original frame
-                        pass
-                frame_rate = int(cap.get(cv2.CAP_PROP_FPS))
-                print(f"Frame rate: {frame_rate} FPS")
-                timestamp = datetime.now()
-                response = self.process_frame(frame, timestamp)
-                if "annotated_frame_base64" in response:
-                    annotated_frame = self._decode_image_base64(
-                        response["annotated_frame_base64"]
-                    )
-                    if annotated_frame is not None:
-                        # Display the annotated frame in a window
-                        cv2.imshow(
-                            "Video Detection Tracker",
-                            annotated_frame,
-                        )
-                # Call the callback with the response
-                result_callback(response)
-                # Break the loop if 'q' is pressed
-                if cv2.waitKey(1) & 0xFF == ord("q"):
-                    break
-            else:
-                # Break the loop if the end of the video is reached
-                break
-
-        # Release the video capture object and close the display window
-        cap.release()
-        cv2.destroyAllWindows()
-
     def _draw_plate_text_corner(self, frame, plates_dict):
         """
         Draw detected license plates at the top-left corner of the frame.
@@ -1068,14 +533,14 @@ class VehicleDetectionTracker:
             numpy.ndarray: Frame with license plates displayed in corner (no vehicle boxes).
         """
         # Quick vehicle detection (no OCR blocking)
-        brightened_frame = self._increase_brightness(frame)
-        results = self.model.track(
-            brightened_frame, persist=True, tracker="bytetrack.yaml"
-        )
-        print("Results: ", results)
+        # brightened_frame = self._increase_brightness(frame)
 
-        # Start with original frame (no bounding boxes)
-        display_frame = frame.copy()
+        results = self.model.track(
+            frame, persist=True, tracker="bytetrack.yaml"
+        )
+        # print("Results: ", results)
+
+        # display_frame = frame.copy()
 
         # Track currently detected vehicles
         current_track_ids = set()
@@ -1093,7 +558,20 @@ class VehicleDetectionTracker:
             # Update tracking history and calculate directions
             for box, track_id in zip(boxes, track_ids):
                 x, y, w, h = box
-                
+                if w < 250 or w > 350:
+                    continue
+                 # Save brightened frame to PNG file
+                try:
+                    timestamp_str = frame_timestamp.strftime("%Y%m%d_%H%M%S_%f")[:-3]
+                    # Extract vehicle frame for OCR
+                    vehicle_frame = frame[
+                        int(y - h / 2 - 10) : int(y + h / 2 + 10), int(x - w / 2) : int(x + w / 2)
+                    ]
+                    filename = f"screenshots/vehicle_frame_{timestamp_str}.png"
+                    cv2.imwrite(filename, vehicle_frame)
+                except Exception as e:
+                    print(f"Error saving brightened frame: {e}")
+        
                 # Update last seen
                 self.vehicle_last_seen[track_id] = frame_timestamp
                 # Reset missing frame count when vehicle is detected
@@ -1129,10 +607,7 @@ class VehicleDetectionTracker:
                     direction_label = self._map_direction_to_label(direction)
                     self.vehicle_directions[track_id] = direction_label
                 
-                # Extract vehicle frame for OCR
-                vehicle_frame = frame[
-                    int(y - h / 2) : int(y + h / 2), int(x - w / 2) : int(x + w / 2)
-                ]
+
                 
                 # Submit OCR to background thread (non-blocking)
                 # Continue processing to get multiple detections for better accuracy
@@ -1165,9 +640,9 @@ class VehicleDetectionTracker:
                 self._save_vehicle_if_complete(track_id, frame_timestamp)
             
         # Draw detected plates at corner (from previous detections)
-        display_frame = self._draw_plate_text_corner(display_frame, self.vehicle_plates)
+        # display_frame = self._draw_plate_text_corner(display_frame, self.vehicle_plates)
         
-        return display_frame
+        return frame
 
     async def process_frame_streaming_async(self, frame, frame_timestamp):
         """
@@ -1282,6 +757,8 @@ class VehicleDetectionTracker:
         """
         Process video/camera stream with optimized performance and auto-reconnect.
         Only shows license plates in corner, no vehicle bounding boxes.
+        For .mp4 files: plays once and exits (no replay).
+        For streams (RTSP, camera): auto-reconnect enabled.
         
         Args:
             video_path (str or int): Path to video file or camera index (0 for webcam), or RTSP URL
@@ -1289,6 +766,9 @@ class VehicleDetectionTracker:
             max_reconnect_attempts (int): Maximum number of reconnect attempts (0 for infinite)
             reconnect_delay (int): Delay in seconds between reconnect attempts
         """
+        # Check if this is an MP4 file (play once, no replay)
+        is_mp4_file = isinstance(video_path, str) and video_path.lower().endswith('.mp4')
+        
         def create_capture(video_path):
             """Create VideoCapture with optimized settings for RTSP streams."""
             cap = cv2.VideoCapture(video_path)
@@ -1324,6 +804,9 @@ class VehicleDetectionTracker:
                     if consecutive_failures >= 5:
                         print("Không thể kết nối sau nhiều lần thử. Kiểm tra đường dẫn RTSP hoặc kết nối mạng.")
                         break
+                    # For MP4 files, don't retry - just exit
+                    if is_mp4_file:
+                        break
                     continue
                 
                 print("Đã kết nối camera thành công!")
@@ -1334,6 +817,11 @@ class VehicleDetectionTracker:
                 
                 if not success or frame is None:
                     consecutive_failures += 1
+                    
+                    # For MP4 files, exit immediately when video ends
+                    if is_mp4_file:
+                        print("Video playback completed.")
+                        break
                     
                     if consecutive_failures >= max_consecutive_failures:
                         print(f"Mất kết nối sau {consecutive_failures} frame liên tiếp. Đang thử kết nối lại...")
