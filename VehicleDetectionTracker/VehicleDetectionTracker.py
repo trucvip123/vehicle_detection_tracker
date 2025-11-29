@@ -5,6 +5,7 @@ from collections import defaultdict
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import threading
+import time
 
 from ultralytics import YOLO
 import numpy as np
@@ -21,6 +22,9 @@ from VehicleDetectionTracker.plate_utils import (
     detect_license_plate_async,
 )
 from VehicleDetectionTracker.utils.send_bot import send_notify_to_telegram
+import logging
+
+logging.getLogger("ultralytics").setLevel(logging.WARNING)  # Suppress ultralytics logging
 
 
 class VehicleDetectionTracker:
@@ -409,7 +413,7 @@ class VehicleDetectionTracker:
         }
         # Process a single video frame and return detection results, an annotated frame, and the original frame as base64.
         results = self.model.track(
-            self._increase_brightness(frame), persist=True, tracker="bytetrack.yaml"
+            self._increase_brightness(frame), persist=True, tracker="bytetrack.yaml", verbose=False
         )  # Perform vehicle tracking in the frame
         if (
             results is not None
@@ -663,7 +667,7 @@ class VehicleDetectionTracker:
         brightened_frame = self._increase_brightness(frame)
         results = await loop.run_in_executor(
             self._executor,
-            lambda: self.model.track(brightened_frame, persist=True, tracker="bytetrack.yaml")
+            lambda: self.model.track(brightened_frame, persist=True, tracker="bytetrack.yaml", verbose=False)
         )
 
         if (
@@ -1068,6 +1072,7 @@ class VehicleDetectionTracker:
         results = self.model.track(
             brightened_frame, persist=True, tracker="bytetrack.yaml"
         )
+        print("Results: ", results)
 
         # Start with original frame (no bounding boxes)
         display_frame = frame.copy()
@@ -1181,7 +1186,7 @@ class VehicleDetectionTracker:
         brightened_frame = self._increase_brightness(frame)
         results = await loop.run_in_executor(
             self._executor,
-            lambda: self.model.track(brightened_frame, persist=True, tracker="bytetrack.yaml")
+            lambda: self.model.track(brightened_frame, persist=True, tracker="bytetrack.yaml", verbose=False)
         )
 
         display_frame = frame.copy()
@@ -1273,23 +1278,76 @@ class VehicleDetectionTracker:
         
         return display_frame
 
-    def process_video_streaming(self, video_path, display_window=True):
+    def process_video_streaming(self, video_path, display_window=True, max_reconnect_attempts=10, reconnect_delay=1):
         """
-        Process video/camera stream with optimized performance.
+        Process video/camera stream with optimized performance and auto-reconnect.
         Only shows license plates in corner, no vehicle bounding boxes.
         
         Args:
-            video_path (str or int): Path to video file or camera index (0 for webcam)
+            video_path (str or int): Path to video file or camera index (0 for webcam), or RTSP URL
             display_window (bool): Whether to display the video window
+            max_reconnect_attempts (int): Maximum number of reconnect attempts (0 for infinite)
+            reconnect_delay (int): Delay in seconds between reconnect attempts
         """
-        cap = cv2.VideoCapture(video_path)
+        def create_capture(video_path):
+            """Create VideoCapture with optimized settings for RTSP streams."""
+            cap = cv2.VideoCapture(video_path)
+            
+            # Optimize for RTSP streams (reduce buffering, improve latency)
+            if isinstance(video_path, str) and video_path.startswith('rtsp://'):
+                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Minimize buffer to reduce latency
+                cap.set(cv2.CAP_PROP_FPS, 30)  # Set expected FPS
+                # Set timeout for RTSP (in milliseconds)
+                cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 5000)
+                cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 5000)
+            
+            return cap
         
-        try:
-            while cap.isOpened():
+        cap = None
+        consecutive_failures = 0
+        max_consecutive_failures = 30  # Allow some consecutive failures before reconnect
+        
+        while True:
+            # Create or recreate capture
+            if cap is None or not cap.isOpened():
+                time.sleep(reconnect_delay)
+                
+                # Release old capture if exists
+                if cap is not None:
+                    cap.release()
+                
+                cap = create_capture(video_path)
+                
+                if not cap.isOpened():
+                    print(f"Không thể mở camera/video stream: {video_path}")
+                    consecutive_failures += 1
+                    if consecutive_failures >= 5:
+                        print("Không thể kết nối sau nhiều lần thử. Kiểm tra đường dẫn RTSP hoặc kết nối mạng.")
+                        break
+                    continue
+                
+                print("Đã kết nối camera thành công!")
+                consecutive_failures = 0
+            
+            try:
                 success, frame = cap.read()
-                if not success:
-                    break
-
+                
+                if not success or frame is None:
+                    consecutive_failures += 1
+                    
+                    if consecutive_failures >= max_consecutive_failures:
+                        print(f"Mất kết nối sau {consecutive_failures} frame liên tiếp. Đang thử kết nối lại...")
+                        cap.release()
+                        cap = None
+                        consecutive_failures = 0
+                        continue
+                    
+                    # If just a few failures, try to continue reading
+                    continue
+                
+                # Reset failure counter on success
+                consecutive_failures = 0
+                
                 # Optionally resize the frame to reduce processing cost
                 if self.stream_frame_size and frame is not None:
                     try:
@@ -1300,7 +1358,11 @@ class VehicleDetectionTracker:
                 timestamp = datetime.now()
 
                 # Fast processing (no blocking OCR)
-                display_frame = self.process_frame_streaming(frame, timestamp)
+                try:
+                    display_frame = self.process_frame_streaming(frame, timestamp)
+                except Exception as e:
+                    print(f"Lỗi xử lý frame: {e}")
+                    continue
 
                 if display_window:
                     cv2.imshow("Vehicle Detection - Streaming Mode", display_frame)
@@ -1308,16 +1370,44 @@ class VehicleDetectionTracker:
                 # Break on 'q' key
                 if cv2.waitKey(1) & 0xFF == ord("q"):
                     break
-        finally:
+                    
+            except Exception as e:
+                # Handle codec errors (like HEVC errors) gracefully
+                error_msg = str(e).lower()
+                if 'hevc' in error_msg or 'codec' in error_msg or 'ref with poc' in error_msg:
+                    # Codec error - just skip this frame and continue
+                    print(f"Lỗi codec (bỏ qua frame): {e}")
+                    consecutive_failures += 1
+                    if consecutive_failures >= max_consecutive_failures:
+                        print("Quá nhiều lỗi codec liên tiếp. Đang thử kết nối lại...")
+                        cap.release()
+                        cap = None
+                        consecutive_failures = 0
+                    continue
+                else:
+                    # Other errors - might need reconnect
+                    print(f"Lỗi không mong muốn: {e}")
+                    consecutive_failures += 1
+                    if consecutive_failures >= 10:
+                        print("Đang thử kết nối lại sau lỗi...")
+                        cap.release()
+                        cap = None
+                        consecutive_failures = 0
+        
+        # Cleanup
+        try:
             # Save any remaining vehicles before closing
             final_timestamp = datetime.now()
             for track_id in self.vehicle_last_seen.keys():
                 if track_id not in self.vehicle_saved_to_excel:
                     self._save_vehicle_if_complete(track_id, final_timestamp)
             
-            cap.release()
+            if cap is not None:
+                cap.release()
             if display_window:
                 cv2.destroyAllWindows()
+        except Exception as e:
+            print(f"Lỗi khi cleanup: {e}")
 
     async def process_camera_stream_async(self, camera_index=0):
         """
