@@ -8,6 +8,7 @@ torch
 torchvision
 ultralytics
 tensorflow
+seaborn
 
 # Tracking dependencies for ultralytics
 lap  # Linear Assignment Problem solver for BYTETracker
