@@ -14,7 +14,7 @@ def main():
     RTSP_SOURCE = "rtsp://admin:MOVYKV@aicamera.gotdns.ch:554/Streaming/Channels/101" 
     VIDEO_SOURCE = r"video\b.mp4"
 
-    tracker.process_video_streaming(RTSP_SOURCE)  # 0 for webcam, or use video file path
+    tracker.process_video_streaming(VIDEO_SOURCE)  # 0 for webcam, or use video file path
     
     # Cleanup
     tracker.cleanup()

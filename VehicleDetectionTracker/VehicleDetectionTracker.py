@@ -467,8 +467,10 @@ class VehicleDetectionTracker:
 
                 # Send Telegram notification only once per vehicle ID
                 if track_id not in self.vehicle_telegram_sent:
+                    filename = f"screenshots/vehicle_{plate_text}.png"
+                    cv2.imwrite(filename, vehicle_frame)
                     print(f"Sending Telegram notification for vehicle {track_id}...")
-                    send_notify_to_telegram(plate_text, direction_label, timestamp)
+                    send_notify_to_telegram(plate_text, direction_label, timestamp, image_path=filename)
                     self.vehicle_telegram_sent.add(track_id)
         except Exception as e:
             print(f"Background plate detection error for vehicle {track_id}: {e}")
