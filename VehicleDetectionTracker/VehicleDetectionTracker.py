@@ -49,7 +49,6 @@ class VehicleDetectionTracker:
         self.track_history = defaultdict(lambda: [])  # History of vehicle tracking
         self.detected_vehicles = set()  # Set of detected vehicles
         self.color_classifier = None
-        self.model_classifier = None
         self.vehicle_timestamps = defaultdict(
             list
         )  # Keep track of timestamps for each tracked vehicle
@@ -83,8 +82,6 @@ class VehicleDetectionTracker:
         self.vehicle_plates = {}  # {track_id: plate_text} - most recent plate
         # Store license plate detection counts for each vehicle
         self.vehicle_plate_counts = defaultdict(lambda: defaultdict(int))  # {track_id: {plate_text: count}}
-        # Track which vehicles have been saved to Excel (to avoid duplicates)
-        self.vehicle_saved_to_excel = set()  # {track_id}
         # Store direction_label for each vehicle
         self.vehicle_directions = {}  # {track_id: direction_label}
         # Track last seen frame for each vehicle
@@ -145,10 +142,6 @@ class VehicleDetectionTracker:
         """
         Initialize classifiers (legacy method, now mainly for OCR).
         """
-        # if self.color_classifier is None:
-        #     self.color_classifier = ColorClassifier()
-        # if self.model_classifier is None:
-        #     self.model_classifier = ModelClassifier()
         if self.ocr_reader is None:
             self._initialize_ocr_reader()
 
@@ -173,15 +166,7 @@ class VehicleDetectionTracker:
             timestamp: Detection timestamp
         """
         try:
-            # Check if already saved
-            if vehicle_id in self.vehicle_saved_to_excel:
-                return
-            
             with self._excel_lock:
-                # Double-check to avoid race condition
-                if vehicle_id in self.vehicle_saved_to_excel:
-                    return
-                
                 # Read existing data
                 if os.path.exists(self.excel_output_path):
                     df = pd.read_excel(self.excel_output_path, engine='openpyxl')
@@ -199,9 +184,6 @@ class VehicleDetectionTracker:
 
                 # Save to Excel
                 df.to_excel(self.excel_output_path, index=False, engine='openpyxl')
-                
-                # Mark as saved
-                self.vehicle_saved_to_excel.add(vehicle_id)
         except Exception as e:
             print(f"Error saving to Excel: {e}")
 
@@ -232,9 +214,6 @@ class VehicleDetectionTracker:
             track_id: Vehicle track ID
             current_timestamp: Current frame timestamp
         """
-        # Skip if already saved
-        if track_id in self.vehicle_saved_to_excel:
-            return
         
         # Get most detected plate
         plate_text, count = self._get_most_detected_plate(track_id)
@@ -284,19 +263,6 @@ class VehicleDetectionTracker:
         """
         # Delegate to plate_utils synchronous detector
         return detect_license_plate_sync(self.plate_model, vehicle_frame, self.ocr_reader, self._model_lock)
-
-    # async def _ocr_attempt(self, ocr_reader, plate_image, cc, ct):
-    #     """
-    #     Single OCR attempt with rotation parameters.
-    #     Wrapped in async to allow parallel execution.
-    #     """
-    #     # This method is now handled in plate_utils (used by async detector). Keep wrapper for compatibility.
-    #     loop = asyncio.get_event_loop()
-    #     rotated_image = utils_rotate.deskew(plate_image, cc, ct)
-    #     with self._model_lock:
-    #         # lp = await loop.run_in_executor(self._executor, lambda: helper.read_plate(ocr_reader, rotated_image))
-    #         lp = await loop.run_in_executor(self._executor, lambda: ocr_reader.read_license_plate(rotated_image))
-    #     return lp, cc, ct
 
     async def _detect_license_plate_async(self, vehicle_frame):
         """
@@ -440,10 +406,6 @@ class VehicleDetectionTracker:
             timestamp: Detection timestamp
         """
         try:
-            # Skip if already saved to Excel
-            if track_id in self.vehicle_saved_to_excel:
-                return
-            
             # Use sync version for simplicity in streaming mode
             license_plate_info = self._detect_license_plate(vehicle_frame)
             plate_text = license_plate_info.get("text") if license_plate_info else None
@@ -490,9 +452,12 @@ class VehicleDetectionTracker:
         """
         # Quick vehicle detection (no OCR blocking)
         # brightened_frame = self._increase_brightness(frame)
+        # Filter: chỉ detect vehicles (car, bus, truck) - loại bỏ motorcycle
+        # COCO classes: car=2, motorcycle=3, bus=5, truck=7
+        vehicle_classes = [2, 5, 7]  # car, bus, truck (không detect motorcycle)
 
         results = self.model.track(
-            frame, persist=True, tracker="bytetrack.yaml"
+            frame, persist=True, tracker="bytetrack.yaml", classes=vehicle_classes
         )
         # print("Results: ", results)
 
@@ -569,17 +534,15 @@ class VehicleDetectionTracker:
                 # Submit OCR to background thread (non-blocking)
                 # Continue processing to get multiple detections for better accuracy
                 if vehicle_frame.size > 0:
-                    # Only process if not already saved to Excel
-                    if track_id not in self.vehicle_saved_to_excel:
-                        # Process every frame to accumulate detection counts
-                        # This allows us to choose the most frequently detected plate
-                        self._executor.submit(
-                            self._process_plate_background_sync,
-                            track_id,
-                            vehicle_frame.copy(),  # Copy to avoid frame modification issues
-                            direction_label,
-                            frame_timestamp
-                        )
+                    # Process every frame to accumulate detection counts
+                    # This allows us to choose the most frequently detected plate
+                    self._executor.submit(
+                        self._process_plate_background_sync,
+                        track_id,
+                        vehicle_frame.copy(),  # Copy to avoid frame modification issues
+                        direction_label,
+                        frame_timestamp
+                    )
         
         # Update missing frame counts for vehicles not detected in this frame
         all_tracked_ids = set(self.vehicle_last_seen.keys())
@@ -592,8 +555,7 @@ class VehicleDetectionTracker:
             self.vehicle_missing_frames[track_id] += 1
             
             # Save vehicle if missing for 10 consecutive frames
-            if (track_id not in self.vehicle_saved_to_excel and 
-                self.vehicle_missing_frames[track_id] >= 10):
+            if self.vehicle_missing_frames[track_id] >= 10:
                 self._save_vehicle_if_complete(track_id, frame_timestamp)
             
         # Draw detected plates at corner (from previous detections)
@@ -734,8 +696,7 @@ class VehicleDetectionTracker:
             # Save any remaining vehicles before closing
             final_timestamp = datetime.now()
             for track_id in self.vehicle_last_seen.keys():
-                if track_id not in self.vehicle_saved_to_excel:
-                    self._save_vehicle_if_complete(track_id, final_timestamp)
+                self._save_vehicle_if_complete(track_id, final_timestamp)
             
             if cap is not None:
                 cap.release()
@@ -757,8 +718,7 @@ class VehicleDetectionTracker:
         # Save any remaining vehicles that haven't been saved
         final_timestamp = datetime.now()
         for track_id in self.vehicle_last_seen.keys():
-            if track_id not in self.vehicle_saved_to_excel:
-                self._save_vehicle_if_complete(track_id, final_timestamp)
+            self._save_vehicle_if_complete(track_id, final_timestamp)
         
         # Clear plate cache
         self.vehicle_plates.clear()

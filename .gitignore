@@ -10,3 +10,6 @@ __pycache__/
 
 # PyPI configuration file (do not include in the repository!)
 ~/.pypirc
+
+screenshots/
+vehicle_data.xlsx
