@@ -255,7 +255,11 @@ class PaddleOCRWrapper:
             return ""
         text = text.strip().upper()
         text = (
-            text.replace(" ", "").replace("O", "0").replace("I", "1").replace("T", "7").replace("D", "0")
+            text.replace(" ", "")
+            .replace("O", "0")
+            .replace("I", "1")
+            .replace("T", "7")
+            .replace("D", "0")
         )
         text = re.sub(r"[^A-Z0-9\.]", "", text)  # chỉ giữ ký tự hợp lệ
         return text
@@ -291,7 +295,7 @@ class PaddleOCRWrapper:
         if len(plate) < 7:
             print("merge_ocr_results returning None due to short length: %s", plate)
             return None
-        if '-' not in plate:
+        if "-" not in plate:
             return None
         return plate
 
@@ -324,8 +328,14 @@ class PaddleOCRWrapper:
             if len(license_plate) < 7:
                 return None
             # Check if the first character is a digit (biển số xe VN phải bắt đầu bằng số)
-            if not license_plate[0].isdigit() or not license_plate[1].isdigit() or license_plate[2].isdigit():
-                print(f"DEBUG: License plate does not format license plate: {license_plate}")
+            if (
+                not license_plate[0].isdigit()
+                or not license_plate[1].isdigit()
+                or license_plate[2].isdigit()
+            ):
+                print(
+                    f"DEBUG: License plate does not format license plate: {license_plate}"
+                )
                 return None
         return self.merge_ocr_results(unique_texts)
 

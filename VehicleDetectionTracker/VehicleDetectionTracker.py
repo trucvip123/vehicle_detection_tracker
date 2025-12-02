@@ -24,41 +24,49 @@ from VehicleDetectionTracker.plate_utils import (
 from VehicleDetectionTracker.utils.send_bot import send_notify_to_telegram
 import logging
 
-logging.getLogger("ultralytics").setLevel(logging.WARNING)  # Suppress ultralytics logging
+logging.getLogger("ultralytics").setLevel(
+    logging.WARNING
+)  # Suppress ultralytics logging
 
 
 class VehicleDetectionTracker:
 
-    def __init__(self, model_path="yolov8n.pt", excel_output_path="vehicle_data.xlsx", initialize_all_models=True, stream_frame_size=None):
+    def __init__(
+        self,
+        model_path="yolov8n.pt",
+        excel_output_path="vehicle_data.xlsx",
+        initialize_all_models=True,
+        stream_frame_size=None,
+    ):
         """
         Initialize the VehicleDetection class.
 
         Args:
             model_path (str): Path to the YOLO model file.
             excel_output_path (str): Path to Excel file for saving vehicle data.
-            initialize_all_models (bool): If True, initialize all models (YOLO, plate detector, OCR) 
+            initialize_all_models (bool): If True, initialize all models (YOLO, plate detector, OCR)
                                          immediately. If False, use lazy loading for OCR.
         """
         print("Initializing Vehicle Detection Tracker...")
-        
+
         # Load the YOLO model (always loaded first)
         print("Loading YOLO vehicle detection model...")
         self.model = YOLO(model_path)
         print("✓ YOLO model loaded")
-        
+
         self.track_history = defaultdict(lambda: [])  # History of vehicle tracking
         self.detected_vehicles = set()  # Set of detected vehicles
         self.color_classifier = None
         self.vehicle_timestamps = defaultdict(
             list
         )  # Keep track of timestamps for each tracked vehicle
-        
+
         # Initialize license plate detector model (always loaded)
         print("Loading license plate detector model...")
         self.plate_model = None
         self._initialize_plate_detector()
         print("✓ License plate detector loaded")
-        
+
         # Initialize OCR reader based on flag
         self.ocr_reader = None
         if initialize_all_models:
@@ -67,13 +75,13 @@ class VehicleDetectionTracker:
             print("✓ OCR reader initialized")
         else:
             print("⚠ OCR reader will be initialized on first use (lazy loading)")
-        
+
         self.text_plate = None
         # Optional target frame size for resizing streaming/video frames.
         # Should be a tuple (width, height) or None to disable resizing.
         # Example: stream_frame_size=(640, 480)
         self.stream_frame_size = stream_frame_size
-        
+
         # Thread pool for async operations
         self._executor = ThreadPoolExecutor(max_workers=4)
         # Lock for thread-safe model access
@@ -81,7 +89,9 @@ class VehicleDetectionTracker:
         # Store detected license plates per vehicle ID for streaming display
         self.vehicle_plates = {}  # {track_id: plate_text} - most recent plate
         # Store license plate detection counts for each vehicle
-        self.vehicle_plate_counts = defaultdict(lambda: defaultdict(int))  # {track_id: {plate_text: count}}
+        self.vehicle_plate_counts = defaultdict(
+            lambda: defaultdict(int)
+        )  # {track_id: {plate_text: count}}
         # Store direction_label for each vehicle
         self.vehicle_directions = {}  # {track_id: direction_label}
         # Track last seen frame for each vehicle
@@ -96,7 +106,7 @@ class VehicleDetectionTracker:
         self._excel_lock = threading.Lock()
         # Initialize Excel file if it doesn't exist
         self._initialize_excel_file()
-        
+
         print("✓ All initialization complete!")
 
     def _initialize_ocr_reader(self):
@@ -115,20 +125,20 @@ class VehicleDetectionTracker:
         """
         if self.model is None:
             raise RuntimeError("YOLO model not initialized!")
-        
+
         if self.plate_model is None:
             print("Warning: Plate detector not initialized, reinitializing...")
             self._initialize_plate_detector()
-        
+
         if self.ocr_reader is None:
             print("Warning: OCR reader not initialized, initializing now...")
             self._initialize_ocr_reader()
             print("✓ OCR reader initialized")
-    
+
     def get_initialization_status(self):
         """
         Get status of model initialization.
-        
+
         Returns:
             dict: Status of each model (initialized or not)
         """
@@ -150,8 +160,10 @@ class VehicleDetectionTracker:
         Initialize Excel file with headers if it doesn't exist.
         """
         if not os.path.exists(self.excel_output_path):
-            df = pd.DataFrame(columns=["Vehicle_ID", "License_Plate", "Direction_Label", "Timestamp"])
-            df.to_excel(self.excel_output_path, index=False, engine='openpyxl')
+            df = pd.DataFrame(
+                columns=["Vehicle_ID", "License_Plate", "Direction_Label", "Timestamp"]
+            )
+            df.to_excel(self.excel_output_path, index=False, engine="openpyxl")
             print(f"Created Excel file: {self.excel_output_path}")
 
     def _save_to_excel(self, vehicle_id, license_plate, direction_label, timestamp):
@@ -169,37 +181,47 @@ class VehicleDetectionTracker:
             with self._excel_lock:
                 # Read existing data
                 if os.path.exists(self.excel_output_path):
-                    df = pd.read_excel(self.excel_output_path, engine='openpyxl')
+                    df = pd.read_excel(self.excel_output_path, engine="openpyxl")
                 else:
-                    df = pd.DataFrame(columns=["Vehicle_ID", "License_Plate", "Direction_Label", "Timestamp"])
+                    df = pd.DataFrame(
+                        columns=[
+                            "Vehicle_ID",
+                            "License_Plate",
+                            "Direction_Label",
+                            "Timestamp",
+                        ]
+                    )
 
                 # Append new row
                 new_row = {
                     "Vehicle_ID": vehicle_id,
                     "License_Plate": license_plate,
                     "Direction_Label": direction_label,
-                    "Timestamp": timestamp.strftime("%Y-%m-%d %H:%M:%S")
+                    "Timestamp": timestamp.strftime("%Y-%m-%d %H:%M:%S"),
                 }
                 df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
 
                 # Save to Excel
-                df.to_excel(self.excel_output_path, index=False, engine='openpyxl')
+                df.to_excel(self.excel_output_path, index=False, engine="openpyxl")
         except Exception as e:
             print(f"Error saving to Excel: {e}")
 
     def _get_most_detected_plate(self, track_id):
         """
         Get the license plate with highest detection count for a vehicle.
-        
+
         Args:
             track_id: Vehicle track ID
-            
+
         Returns:
             tuple: (plate_text, count) or (None, 0) if no plates detected
         """
-        if track_id not in self.vehicle_plate_counts or not self.vehicle_plate_counts[track_id]:
+        if (
+            track_id not in self.vehicle_plate_counts
+            or not self.vehicle_plate_counts[track_id]
+        ):
             return None, 0
-        
+
         plate_counts = self.vehicle_plate_counts[track_id]
         # Find plate with maximum count
         most_detected_plate = max(plate_counts.items(), key=lambda x: x[1])
@@ -209,23 +231,25 @@ class VehicleDetectionTracker:
         """
         Save vehicle to Excel if it's complete (no longer detected or after threshold).
         Saves the license plate with highest detection count.
-        
+
         Args:
             track_id: Vehicle track ID
             current_timestamp: Current frame timestamp
         """
-        
+
         # Get most detected plate
         plate_text, count = self._get_most_detected_plate(track_id)
-        
+
         if plate_text and count > 0:
             # Get direction and timestamp
             direction_label = self.vehicle_directions.get(track_id, "Unknown")
             timestamp = self.vehicle_last_seen.get(track_id, current_timestamp)
-            
+
             # Save to Excel
             self._save_to_excel(track_id, plate_text, direction_label, timestamp)
-            print(f"Vehicle {track_id} saved: {plate_text} (detected {count} times) - {direction_label}")
+            print(
+                f"Vehicle {track_id} saved: {plate_text} (detected {count} times) - {direction_label}"
+            )
 
     def _initialize_plate_detector(self):
         """
@@ -262,7 +286,9 @@ class VehicleDetectionTracker:
             dict: Dictionary containing license plate text, confidence score, and coordinates.
         """
         # Delegate to plate_utils synchronous detector
-        return detect_license_plate_sync(self.plate_model, vehicle_frame, self.ocr_reader, self._model_lock)
+        return detect_license_plate_sync(
+            self.plate_model, vehicle_frame, self.ocr_reader, self._model_lock
+        )
 
     async def _detect_license_plate_async(self, vehicle_frame):
         """
@@ -276,7 +302,13 @@ class VehicleDetectionTracker:
             dict: Dictionary containing license plate text, confidence score, and coordinates.
         """
         # Delegate to plate_utils async detector
-        return await detect_license_plate_async(self.plate_model, vehicle_frame, self.ocr_reader, self._executor, self._model_lock)
+        return await detect_license_plate_async(
+            self.plate_model,
+            vehicle_frame,
+            self.ocr_reader,
+            self._executor,
+            self._model_lock,
+        )
 
     def _map_direction_to_label(self, direction):
         # Define direction ranges in radians and their corresponding labels
@@ -347,38 +379,32 @@ class VehicleDetectionTracker:
         """
         Draw detected license plates at the top-left corner of the frame.
         Each vehicle's plate is displayed on a separate line.
-        
+
         Args:
             frame (numpy.ndarray): Frame to draw on
             plates_dict (dict): Dictionary of {track_id: plate_text}
         """
         if not plates_dict:
             return frame
-        
+
         # Draw background rectangle for text
         h, w = frame.shape[:2]
         num_plates = len(plates_dict)
         text_height = 30
         padding = 10
         bg_height = num_plates * text_height + padding * 2
-        
+
         # Semi-transparent background
         overlay = frame.copy()
-        cv2.rectangle(
-            overlay,
-            (10, 10),
-            (400, bg_height),
-            (0, 0, 0),
-            -1
-        )
+        cv2.rectangle(overlay, (10, 10), (400, bg_height), (0, 0, 0), -1)
         cv2.addWeighted(overlay, 0.7, frame, 0.3, 0, frame)
-        
+
         # Draw text for each detected plate
         y_offset = padding + 25
         font = cv2.FONT_HERSHEY_SIMPLEX
         font_scale = 0.7
         font_thickness = 2
-        
+
         for idx, (track_id, plate_text) in enumerate(plates_dict.items()):
             if plate_text and plate_text != "unknown":
                 text = f"Vehicle {track_id}: {plate_text}"
@@ -389,16 +415,18 @@ class VehicleDetectionTracker:
                     font,
                     font_scale,
                     (0, 255, 0),  # Green color
-                    font_thickness
+                    font_thickness,
                 )
-        
+
         return frame
 
-    def _process_plate_background_sync(self, track_id, vehicle_frame, direction_label=None, timestamp=None):
+    def _process_plate_background_sync(
+        self, track_id, vehicle_frame, direction_label=None, timestamp=None
+    ):
         """
         Sync wrapper for background plate processing using ThreadPoolExecutor.
         Tracks license plate detection counts (doesn't save to Excel immediately).
-        
+
         Args:
             track_id: Vehicle track ID
             vehicle_frame: Cropped vehicle frame
@@ -409,20 +437,20 @@ class VehicleDetectionTracker:
             # Use sync version for simplicity in streaming mode
             license_plate_info = self._detect_license_plate(vehicle_frame)
             plate_text = license_plate_info.get("text") if license_plate_info else None
-            
+
             if plate_text and plate_text != "unknown":
                 # Update most recent plate for display
                 self.vehicle_plates[track_id] = plate_text
-                
+
                 # Increment detection count for this plate
                 self.vehicle_plate_counts[track_id][plate_text] += 1
-                
+
                 # Get direction if available, otherwise use cached or "Unknown"
                 if direction_label:
                     self.vehicle_directions[track_id] = direction_label
                 elif track_id not in self.vehicle_directions:
                     self.vehicle_directions[track_id] = "Unknown"
-                
+
                 # Update last seen timestamp
                 if timestamp:
                     self.vehicle_last_seen[track_id] = timestamp
@@ -432,7 +460,9 @@ class VehicleDetectionTracker:
                     filename = f"screenshots/vehicle_{plate_text}.png"
                     cv2.imwrite(filename, vehicle_frame)
                     print(f"Sending Telegram notification for vehicle {track_id}...")
-                    send_notify_to_telegram(plate_text, direction_label, timestamp, image_path=filename)
+                    send_notify_to_telegram(
+                        plate_text, direction_label, timestamp, image_path=filename
+                    )
                     self.vehicle_telegram_sent.add(track_id)
         except Exception as e:
             print(f"Background plate detection error for vehicle {track_id}: {e}")
@@ -465,7 +495,7 @@ class VehicleDetectionTracker:
 
         # Track currently detected vehicles
         current_track_ids = set()
-        
+
         if (
             results is not None
             and results[0] is not None
@@ -475,29 +505,30 @@ class VehicleDetectionTracker:
             boxes = results[0].boxes.xywh.cpu()
             track_ids = results[0].boxes.id.int().cpu().tolist()
             current_track_ids = set(track_ids)
-            
+
             # Update tracking history and calculate directions
             for box, track_id in zip(boxes, track_ids):
                 x, y, w, h = box
                 if w < 250:
                     continue
-                 # Save brightened frame to PNG file
+                # Save brightened frame to PNG file
                 try:
                     timestamp_str = frame_timestamp.strftime("%Y%m%d_%H%M%S_%f")[:-3]
                     # Extract vehicle frame for OCR
                     vehicle_frame = frame[
-                        int(y - h / 2 - 10) : int(y + h / 2 + 10), int(x - w / 2) : int(x + w / 2)
+                        int(y - h / 2 - 10) : int(y + h / 2 + 10),
+                        int(x - w / 2) : int(x + w / 2),
                     ]
                     filename = f"screenshots/vehicle_frame_{timestamp_str}.png"
                     cv2.imwrite(filename, vehicle_frame)
                 except Exception as e:
                     print(f"Error saving brightened frame: {e}")
-        
+
                 # Update last seen
                 self.vehicle_last_seen[track_id] = frame_timestamp
                 # Reset missing frame count when vehicle is detected
                 self.vehicle_missing_frames[track_id] = 0
-                
+
                 # Update tracking history
                 if track_id not in self.track_history:
                     self.track_history[track_id] = []
@@ -506,7 +537,7 @@ class VehicleDetectionTracker:
                 max_history_length = 30
                 if len(track) > max_history_length:
                     track.pop(0)
-                
+
                 # Update timestamps
                 if track_id not in self.vehicle_timestamps:
                     self.vehicle_timestamps[track_id] = {
@@ -515,19 +546,19 @@ class VehicleDetectionTracker:
                     }
                 self.vehicle_timestamps[track_id]["timestamps"].append(frame_timestamp)
                 self.vehicle_timestamps[track_id]["positions"].append((x, y))
-                
+
                 # Calculate direction_label if enough data
                 timestamps = self.vehicle_timestamps[track_id]["timestamps"]
                 positions = self.vehicle_timestamps[track_id]["positions"]
                 direction_label = "Unknown"
-                
+
                 if len(positions) >= 2:
                     initial_x, initial_y = positions[0]
                     final_x, final_y = positions[-1]
                     direction = math.atan2(final_y - initial_y, final_x - initial_x)
                     direction_label = self._map_direction_to_label(direction)
                     self.vehicle_directions[track_id] = direction_label
-                
+
                 if direction_label == "Unknown":
                     continue
 
@@ -541,35 +572,41 @@ class VehicleDetectionTracker:
                         track_id,
                         vehicle_frame.copy(),  # Copy to avoid frame modification issues
                         direction_label,
-                        frame_timestamp
+                        frame_timestamp,
                     )
-        
+
         # Update missing frame counts for vehicles not detected in this frame
         all_tracked_ids = set(self.vehicle_last_seen.keys())
         missing_ids = all_tracked_ids - current_track_ids
-        
+
         for track_id in missing_ids:
             # Increment missing frame count
             if track_id not in self.vehicle_missing_frames:
                 self.vehicle_missing_frames[track_id] = 0
             self.vehicle_missing_frames[track_id] += 1
-            
+
             # Save vehicle if missing for 10 consecutive frames
             if self.vehicle_missing_frames[track_id] >= 10:
                 self._save_vehicle_if_complete(track_id, frame_timestamp)
-            
+
         # Draw detected plates at corner (from previous detections)
         # display_frame = self._draw_plate_text_corner(display_frame, self.vehicle_plates)
-        
+
         return frame
 
-    def process_video_streaming(self, video_path, display_window=True, max_reconnect_attempts=10, reconnect_delay=1):
+    def process_video_streaming(
+        self,
+        video_path,
+        display_window=True,
+        max_reconnect_attempts=10,
+        reconnect_delay=1,
+    ):
         """
         Process video/camera stream with optimized performance and auto-reconnect.
         Only shows license plates in corner, no vehicle bounding boxes.
         For .mp4 files: plays once and exits (no replay).
         For streams (RTSP, camera): auto-reconnect enabled.
-        
+
         Args:
             video_path (str or int): Path to video file or camera index (0 for webcam), or RTSP URL
             display_window (bool): Whether to display the video window
@@ -577,78 +614,86 @@ class VehicleDetectionTracker:
             reconnect_delay (int): Delay in seconds between reconnect attempts
         """
         # Check if this is an MP4 file (play once, no replay)
-        is_mp4_file = isinstance(video_path, str) and video_path.lower().endswith('.mp4')
-        
+        is_mp4_file = isinstance(video_path, str) and video_path.lower().endswith(
+            ".mp4"
+        )
+
         def create_capture(video_path):
             """Create VideoCapture with optimized settings for RTSP streams."""
             cap = cv2.VideoCapture(video_path)
-            
+
             # Optimize for RTSP streams (reduce buffering, improve latency)
-            if isinstance(video_path, str) and video_path.startswith('rtsp://'):
+            if isinstance(video_path, str) and video_path.startswith("rtsp://"):
                 cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Minimize buffer to reduce latency
                 cap.set(cv2.CAP_PROP_FPS, 30)  # Set expected FPS
                 # Set timeout for RTSP (in milliseconds)
                 cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 5000)
                 cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 5000)
-            
+
             return cap
-        
+
         cap = None
         consecutive_failures = 0
-        max_consecutive_failures = 30  # Allow some consecutive failures before reconnect
-        
+        max_consecutive_failures = (
+            30  # Allow some consecutive failures before reconnect
+        )
+
         while True:
             # Create or recreate capture
             if cap is None or not cap.isOpened():
                 time.sleep(reconnect_delay)
-                
+
                 # Release old capture if exists
                 if cap is not None:
                     cap.release()
-                
+
                 cap = create_capture(video_path)
-                
+
                 if not cap.isOpened():
                     print(f"Không thể mở camera/video stream: {video_path}")
                     consecutive_failures += 1
                     if consecutive_failures >= 5:
-                        print("Không thể kết nối sau nhiều lần thử. Kiểm tra đường dẫn RTSP hoặc kết nối mạng.")
+                        print(
+                            "Không thể kết nối sau nhiều lần thử. Kiểm tra đường dẫn RTSP hoặc kết nối mạng."
+                        )
                         break
                     # For MP4 files, don't retry - just exit
                     if is_mp4_file:
                         break
                     continue
-                
+
                 print("Đã kết nối camera thành công!")
                 consecutive_failures = 0
-            
+
             try:
                 success, frame = cap.read()
-                
+
                 if not success or frame is None:
                     consecutive_failures += 1
-                    
+
                     # For MP4 files, exit immediately when video ends
                     if is_mp4_file:
                         print("Video playback completed.")
                         break
-                    
+
                     if consecutive_failures >= max_consecutive_failures:
                         cap.release()
                         cap = None
                         consecutive_failures = 0
                         continue
-                    
+
                     # If just a few failures, try to continue reading
                     continue
-                
+
                 # Reset failure counter on success
                 consecutive_failures = 0
-                
+
                 # Optionally resize the frame to reduce processing cost
                 if self.stream_frame_size and frame is not None:
                     try:
-                        frame = cv2.resize(frame, self.stream_frame_size, interpolation=cv2.INTER_AREA)
+                        frame = cv2.resize(
+                            frame, self.stream_frame_size, interpolation=cv2.INTER_AREA
+                        )
                     except Exception:
                         pass
 
@@ -667,11 +712,15 @@ class VehicleDetectionTracker:
                 # Break on 'q' key
                 if cv2.waitKey(1) & 0xFF == ord("q"):
                     break
-                    
+
             except Exception as e:
                 # Handle codec errors (like HEVC errors) gracefully
                 error_msg = str(e).lower()
-                if 'hevc' in error_msg or 'codec' in error_msg or 'ref with poc' in error_msg:
+                if (
+                    "hevc" in error_msg
+                    or "codec" in error_msg
+                    or "ref with poc" in error_msg
+                ):
                     # Codec error - just skip this frame and continue
                     print(f"Lỗi codec (bỏ qua frame): {e}")
                     consecutive_failures += 1
@@ -690,14 +739,14 @@ class VehicleDetectionTracker:
                         cap.release()
                         cap = None
                         consecutive_failures = 0
-        
+
         # Cleanup
         try:
             # Save any remaining vehicles before closing
             final_timestamp = datetime.now()
             for track_id in self.vehicle_last_seen.keys():
                 self._save_vehicle_if_complete(track_id, final_timestamp)
-            
+
             if cap is not None:
                 cap.release()
             if display_window:
@@ -712,13 +761,13 @@ class VehicleDetectionTracker:
         Call this when done using the tracker.
         """
         # Wait for executor to finish any pending tasks
-        if hasattr(self, '_executor') and self._executor:
+        if hasattr(self, "_executor") and self._executor:
             self._executor.shutdown(wait=True)
-        
+
         # Save any remaining vehicles that haven't been saved
         final_timestamp = datetime.now()
         for track_id in self.vehicle_last_seen.keys():
             self._save_vehicle_if_complete(track_id, final_timestamp)
-        
+
         # Clear plate cache
         self.vehicle_plates.clear()

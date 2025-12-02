@@ -1,7 +1,9 @@
 """
 Utilities for vehicle tracking, speed calculation and direction estimation.
 """
+
 import math
+
 
 def map_direction_to_label(direction):
     """Map direction angle to human-readable label."""
@@ -20,14 +22,15 @@ def map_direction_to_label(direction):
             return label
     return "Unknown"
 
+
 def calculate_speed_and_direction(timestamps, positions):
     """
     Calculate speed and direction from position history.
-    
+
     Args:
         timestamps: List of timestamps
         positions: List of (x,y) positions
-        
+
     Returns:
         dict: Speed and direction information
     """
@@ -36,13 +39,13 @@ def calculate_speed_and_direction(timestamps, positions):
             "kph": None,
             "reliability": 0.0,
             "direction_label": None,
-            "direction": None
+            "direction": None,
         }
 
     # Calculate speeds
     delta_t_list = []
     distance_list = []
-    
+
     for i in range(1, len(timestamps)):
         t1, t2 = timestamps[i - 1], timestamps[i]
         delta_t = t2.timestamp() - t1.timestamp()
@@ -54,10 +57,9 @@ def calculate_speed_and_direction(timestamps, positions):
             distance_list.append(distance)
 
     speeds = [
-        distance / delta_t
-        for distance, delta_t in zip(distance_list, delta_t_list)
+        distance / delta_t for distance, delta_t in zip(distance_list, delta_t_list)
     ]
-    
+
     # Calculate average speed
     if len(speeds) > 0:
         avg_speed_mps = sum(speeds) / len(speeds)
@@ -83,17 +85,19 @@ def calculate_speed_and_direction(timestamps, positions):
         "kph": speed_kph,
         "reliability": reliability,
         "direction_label": direction_label,
-        "direction": direction
+        "direction": direction,
     }
+
 
 def convert_mps_to_kmph(meters_per_second):
     """Convert speed from m/s to km/h."""
     return meters_per_second * 3.6
 
+
 def update_tracking_history(track_history, track_id, x, y, max_history=30):
     """
     Update tracking history for a vehicle.
-    
+
     Args:
         track_history: Dictionary of tracking histories
         track_id: Vehicle ID
@@ -102,11 +106,11 @@ def update_tracking_history(track_history, track_id, x, y, max_history=30):
     """
     if track_id not in track_history:
         track_history[track_id] = []
-    
+
     track = track_history[track_id]
     track.append((float(x), float(y)))
-    
+
     if len(track) > max_history:
         track.pop(0)
-    
+
     return track

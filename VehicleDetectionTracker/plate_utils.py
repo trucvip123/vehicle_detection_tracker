@@ -47,7 +47,10 @@ def _sync_plate_inference(plate_model, vehicle_frame, model_lock, size=640):
 
 def _async_plate_inference(plate_model, vehicle_frame, executor, model_lock, size=640):
     loop = asyncio.get_event_loop()
-    return loop.run_in_executor(executor, lambda: _sync_plate_inference(plate_model, vehicle_frame, model_lock, size))
+    return loop.run_in_executor(
+        executor,
+        lambda: _sync_plate_inference(plate_model, vehicle_frame, model_lock, size),
+    )
 
 
 def _run_ocr_attempt(ocr_reader, plate_image):
@@ -61,7 +64,9 @@ async def ocr_attempt_async(ocr_reader, plate_image, cc, ct, executor, model_loc
     rotated_image = utils_rotate.deskew(plate_image, cc, ct)
     # OCR reading uses helper.read_plate which is CPU-bound; run in executor
     with model_lock:
-        lp = await loop.run_in_executor(executor, lambda: _run_ocr_attempt(ocr_reader, rotated_image))
+        lp = await loop.run_in_executor(
+            executor, lambda: _run_ocr_attempt(ocr_reader, rotated_image)
+        )
     return lp, cc, ct
 
 
@@ -97,7 +102,9 @@ def detect_license_plate_sync(plate_model, vehicle_frame, ocr_reader, model_lock
             for ct in range(0, 2):
                 with model_lock:
                     # lp = helper.read_plate(ocr_reader, utils_rotate.deskew(plate_image, cc, ct))
-                    lp = ocr_reader.read_license_plate(utils_rotate.deskew(plate_image, cc, ct))
+                    lp = ocr_reader.read_license_plate(
+                        utils_rotate.deskew(plate_image, cc, ct)
+                    )
                 if lp != "unknown" and lp is not None:
                     return {"text": lp, "bbox": (x1, y1, x2, y2)}
 
@@ -107,13 +114,17 @@ def detect_license_plate_sync(plate_model, vehicle_frame, ocr_reader, model_lock
         return {"text": None, "bbox": None}
 
 
-async def detect_license_plate_async(plate_model, vehicle_frame, ocr_reader, executor, model_lock):
+async def detect_license_plate_async(
+    plate_model, vehicle_frame, ocr_reader, executor, model_lock
+):
     try:
         if plate_model is None:
             return {"text": None, "bbox": None}
 
         # run detection in executor
-        results = await _async_plate_inference(plate_model, vehicle_frame, executor, model_lock)
+        results = await _async_plate_inference(
+            plate_model, vehicle_frame, executor, model_lock
+        )
 
         if results is None or not results.pred[0].shape[0]:
             return {"text": None, "bbox": None}
@@ -138,7 +149,11 @@ async def detect_license_plate_async(plate_model, vehicle_frame, ocr_reader, exe
         tasks = []
         for cc in range(0, 2):
             for ct in range(0, 2):
-                tasks.append(ocr_attempt_async(ocr_reader, plate_image, cc, ct, executor, model_lock))
+                tasks.append(
+                    ocr_attempt_async(
+                        ocr_reader, plate_image, cc, ct, executor, model_lock
+                    )
+                )
 
         lp = "unknown"
         results = await asyncio.gather(*tasks, return_exceptions=True)

@@ -1,6 +1,7 @@
 """
 Image processing utilities
 """
+
 import cv2
 import base64
 import numpy as np
@@ -8,7 +9,7 @@ import numpy as np
 
 class ImageUtils:
     """Utility class for image operations"""
-    
+
     @staticmethod
     def encode_image_base64(image):
         """
@@ -57,4 +58,3 @@ class ImageUtils:
         """
         brightened_image = cv2.convertScaleAbs(image, alpha=factor, beta=0)
         return brightened_image
-
