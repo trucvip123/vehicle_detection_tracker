@@ -261,15 +261,18 @@ class PaddleOCRWrapper:
             .replace("T", "7")
             .replace("D", "0")
         )
-        text = re.sub(r"[^A-Z0-9\.]", "", text)  # chỉ giữ ký tự hợp lệ
+        # print(f"DEBUG: text after replace: {text}")
+        text = re.sub(r"[^A-Z0-9\.-]", "", text)  # chỉ giữ ký tự hợp lệ
+        # print(f"DEBUG: text after sub: {text}")
         return text
 
     def merge_ocr_results(self, ocr_results):
+        # print(f"DEBUG: ocr_results: {ocr_results}")
         """Hợp nhất danh sách kết quả OCR thành biển số hợp lý nhất."""
         normalized = [self.normalize_plate_text(t) for t in ocr_results if t]
         if not normalized:
             return None
-
+        # print(f"DEBUG: normalized: {normalized}")
         # Đếm tần suất chuỗi
         counts = collections.Counter(normalized)
         most_common = counts.most_common(1)[0][0]
@@ -283,15 +286,17 @@ class PaddleOCRWrapper:
             t for t in normalized if re.match(r"^\d{3,6}$", re.sub(r"\D", "", t))
         ]
         number_part = max(number_candidates, key=len, default="")
-
+        # print(f"DEBUG: province_part: {province_part}")
+        # print(f"DEBUG: number_part: {number_part}")
         # Ghép hai phần lại
         if province_part and number_part:
             plate = f"{province_part}-{number_part}"
         else:
             plate = most_common
-
+        # print(f"DEBUG: plate before format: {plate}")
         # Làm sạch định dạng kiểu 77A33151 -> 77A-331.51
         plate = re.sub(r"^(\d{2}[A-Z])[- ]?(\d{3})(\d{2})$", r"\1-\2.\3", plate)
+        # print(f"DEBUG: plate after format: {plate}")
         if len(plate) < 7:
             print("merge_ocr_results returning None due to short length: %s", plate)
             return None
@@ -373,7 +378,7 @@ class PaddleOCRWrapper:
                 # Format: XX XXX
                 formatted = f"{letter_part} {number_part}"
 
-            print(f"DEBUG: Formatted license plate: {formatted}")
+            # print(f"DEBUG: Formatted license plate: {formatted}")
             return formatted
 
         # Nếu không match pattern, thử tách chữ cái và số

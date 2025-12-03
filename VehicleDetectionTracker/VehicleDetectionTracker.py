@@ -18,8 +18,7 @@ from VehicleDetectionTracker.function.paddleocr_wrapper import create_paddleocr_
 from VehicleDetectionTracker.plate_utils import (
     initialize_plate_detector,
     preprocess_plate_image,
-    detect_license_plate_sync,
-    detect_license_plate_async,
+    detect_license_plate_sync
 )
 from VehicleDetectionTracker.utils.send_bot import send_notify_to_telegram
 import logging
@@ -27,6 +26,11 @@ import logging
 logging.getLogger("ultralytics").setLevel(
     logging.WARNING
 )  # Suppress ultralytics logging
+
+# Global set to track vehicles that have already sent Telegram notifications
+# This is shared across all threads to prevent duplicate notifications
+_vehicle_telegram_sent = set()
+_vehicle_telegram_sent_lock = threading.Lock()
 
 
 class VehicleDetectionTracker:
@@ -98,12 +102,12 @@ class VehicleDetectionTracker:
         self.vehicle_last_seen = {}  # {track_id: timestamp}
         # Track number of consecutive frames vehicle has been missing
         self.vehicle_missing_frames = {}  # {track_id: missing_frame_count}
-        # Track which vehicles have already sent Telegram notifications (send only once per ID)
-        self.vehicle_telegram_sent = set()  # {track_id}
         # Excel output file path
         self.excel_output_path = excel_output_path
         # Lock for Excel file operations
         self._excel_lock = threading.Lock()
+        # Flag to avoid spamming Telegram on repeated stream-open failures
+        self._stream_notify_sent = False
         # Initialize Excel file if it doesn't exist
         self._initialize_excel_file()
 
@@ -290,26 +294,6 @@ class VehicleDetectionTracker:
             self.plate_model, vehicle_frame, self.ocr_reader, self._model_lock
         )
 
-    async def _detect_license_plate_async(self, vehicle_frame):
-        """
-        Async version: Detect license plate and recognize its text from a vehicle frame.
-        Uses parallel OCR attempts for better performance.
-
-        Args:
-            vehicle_frame (numpy.ndarray): The cropped frame containing the vehicle.
-
-        Returns:
-            dict: Dictionary containing license plate text, confidence score, and coordinates.
-        """
-        # Delegate to plate_utils async detector
-        return await detect_license_plate_async(
-            self.plate_model,
-            vehicle_frame,
-            self.ocr_reader,
-            self._executor,
-            self._model_lock,
-        )
-
     def _map_direction_to_label(self, direction):
         # Define direction ranges in radians and their corresponding labels
         direction_ranges = {
@@ -433,11 +417,12 @@ class VehicleDetectionTracker:
             direction_label: Vehicle direction label (if available)
             timestamp: Detection timestamp
         """
+        print(f"Processing plate background for vehicle {track_id}")
         try:
             # Use sync version for simplicity in streaming mode
             license_plate_info = self._detect_license_plate(vehicle_frame)
             plate_text = license_plate_info.get("text") if license_plate_info else None
-
+            print(f"Vehicle {track_id} detected plate: {plate_text}")
             if plate_text and plate_text != "unknown":
                 # Update most recent plate for display
                 self.vehicle_plates[track_id] = plate_text
@@ -454,16 +439,18 @@ class VehicleDetectionTracker:
                 # Update last seen timestamp
                 if timestamp:
                     self.vehicle_last_seen[track_id] = timestamp
-
-                # Send Telegram notification only once per vehicle ID
-                if track_id not in self.vehicle_telegram_sent:
-                    filename = f"screenshots/vehicle_{plate_text}.png"
-                    cv2.imwrite(filename, vehicle_frame)
-                    print(f"Sending Telegram notification for vehicle {track_id}...")
-                    send_notify_to_telegram(
-                        plate_text, direction_label, timestamp, image_path=filename
-                    )
-                    self.vehicle_telegram_sent.add(track_id)
+                
+                # Send Telegram notification only once per vehicle ID (thread-safe)
+                global _vehicle_telegram_sent, _vehicle_telegram_sent_lock
+                with _vehicle_telegram_sent_lock:
+                    if track_id not in _vehicle_telegram_sent:
+                        filename = f"screenshots/vehicle_{plate_text}.png"
+                        cv2.imwrite(filename, vehicle_frame)
+                        print(f"Sending Telegram notification for vehicle {track_id}...")
+                        send_notify_to_telegram(
+                            plate_text, direction_label, timestamp, image_path=filename
+                        )
+                        _vehicle_telegram_sent.add(track_id)
         except Exception as e:
             print(f"Background plate detection error for vehicle {track_id}: {e}")
 
@@ -484,10 +471,10 @@ class VehicleDetectionTracker:
         # brightened_frame = self._increase_brightness(frame)
         # Filter: chỉ detect vehicles (car, bus, truck) - loại bỏ motorcycle
         # COCO classes: car=2, motorcycle=3, bus=5, truck=7
-        vehicle_classes = [2, 5, 7]  # car, bus, truck (không detect motorcycle)
+        vehicle_classes = [2, 5, 6, 7, 8]  # car, bus, truck (không detect motorcycle)
 
         results = self.model.track(
-            frame, persist=True, tracker="bytetrack.yaml", classes=vehicle_classes
+            frame, persist=True, tracker="bytetrack.yaml", classes=vehicle_classes, verbose=False
         )
         # print("Results: ", results)
 
@@ -652,7 +639,18 @@ class VehicleDetectionTracker:
                 if not cap.isOpened():
                     print(f"Không thể mở camera/video stream: {video_path}")
                     consecutive_failures += 1
-                    if consecutive_failures >= 5:
+
+                    # Send a Telegram warning (only once per outage) to avoid spamming
+                    try:
+                        if not getattr(self, "_stream_notify_sent", False):
+                            warn_msg = f"Không thể mở camera/video stream: {video_path} (attempt {consecutive_failures})"
+                            # Reuse existing notify helper: license_plate and direction are used to build message
+                            send_notify_to_telegram("CAMERA_ERROR", warn_msg, timestamp=datetime.now())
+                            self._stream_notify_sent = True
+                    except Exception as e:
+                        print(f"Failed to send Telegram warning: {e}")
+
+                    if consecutive_failures >= 10:
                         print(
                             "Không thể kết nối sau nhiều lần thử. Kiểm tra đường dẫn RTSP hoặc kết nối mạng."
                         )
@@ -664,6 +662,15 @@ class VehicleDetectionTracker:
 
                 print("Đã kết nối camera thành công!")
                 consecutive_failures = 0
+                # Reset notify flag when connection succeeds
+                try:
+                    if getattr(self, "_stream_notify_sent", False):
+                        # send a recovery message (optional)
+                        send_notify_to_telegram("CAMERA_RECOVERY", f"Kết nối camera thành công: {video_path}", timestamp=datetime.now())
+                        self._stream_notify_sent = False
+                except Exception:
+                    # Non-fatal if notify fails
+                    pass
 
             try:
                 success, frame = cap.read()
