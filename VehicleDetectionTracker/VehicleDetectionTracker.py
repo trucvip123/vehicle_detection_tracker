@@ -231,30 +231,6 @@ class VehicleDetectionTracker:
         most_detected_plate = max(plate_counts.items(), key=lambda x: x[1])
         return most_detected_plate
 
-    def _save_vehicle_if_complete(self, track_id, current_timestamp):
-        """
-        Save vehicle to Excel if it's complete (no longer detected or after threshold).
-        Saves the license plate with highest detection count.
-
-        Args:
-            track_id: Vehicle track ID
-            current_timestamp: Current frame timestamp
-        """
-
-        # Get most detected plate
-        plate_text, count = self._get_most_detected_plate(track_id)
-
-        if plate_text and count > 0:
-            # Get direction and timestamp
-            direction_label = self.vehicle_directions.get(track_id, "Unknown")
-            timestamp = self.vehicle_last_seen.get(track_id, current_timestamp)
-
-            # Save to Excel
-            self._save_to_excel(track_id, plate_text, direction_label, timestamp)
-            print(
-                f"Vehicle {track_id} saved: {plate_text} (detected {count} times) - {direction_label}"
-            )
-
     def _initialize_plate_detector(self):
         """
         Initialize the license plate detector model.
@@ -572,13 +548,6 @@ class VehicleDetectionTracker:
                 self.vehicle_missing_frames[track_id] = 0
             self.vehicle_missing_frames[track_id] += 1
 
-            # Save vehicle if missing for 10 consecutive frames
-            if self.vehicle_missing_frames[track_id] >= 10:
-                self._save_vehicle_if_complete(track_id, frame_timestamp)
-
-        # Draw detected plates at corner (from previous detections)
-        # display_frame = self._draw_plate_text_corner(display_frame, self.vehicle_plates)
-
         return frame
 
     def process_video_streaming(
@@ -735,11 +704,6 @@ class VehicleDetectionTracker:
 
         # Cleanup
         try:
-            # Save any remaining vehicles before closing
-            final_timestamp = datetime.now()
-            for track_id in self.vehicle_last_seen.keys():
-                self._save_vehicle_if_complete(track_id, final_timestamp)
-
             if cap is not None:
                 cap.release()
             if display_window:
@@ -756,11 +720,5 @@ class VehicleDetectionTracker:
         # Wait for executor to finish any pending tasks
         if hasattr(self, "_executor") and self._executor:
             self._executor.shutdown(wait=True)
-
-        # Save any remaining vehicles that haven't been saved
-        final_timestamp = datetime.now()
-        for track_id in self.vehicle_last_seen.keys():
-            self._save_vehicle_if_complete(track_id, final_timestamp)
-
         # Clear plate cache
         self.vehicle_plates.clear()
