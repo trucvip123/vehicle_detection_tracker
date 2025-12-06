@@ -20,7 +20,7 @@ from VehicleDetectionTracker.plate_utils import (
     preprocess_plate_image,
     detect_license_plate_sync
 )
-from VehicleDetectionTracker.utils.send_bot import send_notify_to_telegram
+from VehicleDetectionTracker.utils.send_bot import send_notify_to_telegram, send_warning_to_telegram
 import logging
 
 logging.getLogger("ultralytics").setLevel(
@@ -496,7 +496,7 @@ class VehicleDetectionTracker:
             # Update tracking history and calculate directions
             for box, track_id in zip(boxes, track_ids):
                 x, y, w, h = box
-                if w < 250:
+                if w < 240 or h < 100 or y - h/2 < 10:
                     continue
                 # Save brightened frame to PNG file
                 try:
@@ -644,33 +644,19 @@ class VehicleDetectionTracker:
                     try:
                         if not getattr(self, "_stream_notify_sent", False):
                             warn_msg = f"Không thể mở camera/video stream: {video_path} (attempt {consecutive_failures})"
+                            print(warn_msg)
                             # Reuse existing notify helper: license_plate and direction are used to build message
-                            send_notify_to_telegram("CAMERA_ERROR", warn_msg, timestamp=datetime.now())
+                            send_warning_to_telegram(warn_msg)
                             self._stream_notify_sent = True
                     except Exception as e:
                         print(f"Failed to send Telegram warning: {e}")
 
                     if consecutive_failures >= 10:
-                        print(
-                            "Không thể kết nối sau nhiều lần thử. Kiểm tra đường dẫn RTSP hoặc kết nối mạng."
-                        )
+                        warn_msg = f"Không thể kết nối sau nhiều lần thử. Kiểm tra đường dẫn RTSP hoặc kết nối mạng."
+                        print(warn_msg)
+                        send_warning_to_telegram(warn_msg)
+                        self._stream_notify_sent = True
                         break
-                    # For MP4 files, don't retry - just exit
-                    if is_mp4_file:
-                        break
-                    continue
-
-                print("Đã kết nối camera thành công!")
-                consecutive_failures = 0
-                # Reset notify flag when connection succeeds
-                try:
-                    if getattr(self, "_stream_notify_sent", False):
-                        # send a recovery message (optional)
-                        send_notify_to_telegram("CAMERA_RECOVERY", f"Kết nối camera thành công: {video_path}", timestamp=datetime.now())
-                        self._stream_notify_sent = False
-                except Exception:
-                    # Non-fatal if notify fails
-                    pass
 
             try:
                 success, frame = cap.read()
