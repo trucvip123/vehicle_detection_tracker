@@ -33,6 +33,12 @@ _vehicle_telegram_sent = set()
 _vehicle_telegram_sent_lock = threading.Lock()
 
 
+def _log(message):
+    """Print log message with datetime timestamp."""
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{timestamp}] {message}")
+
+
 class VehicleDetectionTracker:
 
     def __init__(
@@ -51,12 +57,12 @@ class VehicleDetectionTracker:
             initialize_all_models (bool): If True, initialize all models (YOLO, plate detector, OCR)
                                          immediately. If False, use lazy loading for OCR.
         """
-        print("Initializing Vehicle Detection Tracker...")
+        _log("Initializing Vehicle Detection Tracker...")
 
         # Load the YOLO model (always loaded first)
-        print("Loading YOLO vehicle detection model...")
+        _log("Loading YOLO vehicle detection model...")
         self.model = YOLO(model_path)
-        print("✓ YOLO model loaded")
+        _log("✓ YOLO model loaded")
 
         self.track_history = defaultdict(lambda: [])  # History of vehicle tracking
         self.detected_vehicles = set()  # Set of detected vehicles
@@ -66,19 +72,19 @@ class VehicleDetectionTracker:
         )  # Keep track of timestamps for each tracked vehicle
 
         # Initialize license plate detector model (always loaded)
-        print("Loading license plate detector model...")
+        _log("Loading license plate detector model...")
         self.plate_model = None
         self._initialize_plate_detector()
-        print("✓ License plate detector loaded")
+        _log("✓ License plate detector loaded")
 
         # Initialize OCR reader based on flag
         self.ocr_reader = None
         if initialize_all_models:
-            print("Initializing OCR reader...")
+            _log("Initializing OCR reader...")
             self._initialize_ocr_reader()
-            print("✓ OCR reader initialized")
+            _log("✓ OCR reader initialized")
         else:
-            print("⚠ OCR reader will be initialized on first use (lazy loading)")
+            _log("⚠ OCR reader will be initialized on first use (lazy loading)")
 
         self.text_plate = None
         # Optional target frame size for resizing streaming/video frames.
@@ -111,7 +117,7 @@ class VehicleDetectionTracker:
         # Initialize Excel file if it doesn't exist
         self._initialize_excel_file()
 
-        print("✓ All initialization complete!")
+        _log("✓ All initialization complete!")
 
     def _initialize_ocr_reader(self):
         """
@@ -131,13 +137,13 @@ class VehicleDetectionTracker:
             raise RuntimeError("YOLO model not initialized!")
 
         if self.plate_model is None:
-            print("Warning: Plate detector not initialized, reinitializing...")
+            _log("Warning: Plate detector not initialized, reinitializing...")
             self._initialize_plate_detector()
 
         if self.ocr_reader is None:
-            print("Warning: OCR reader not initialized, initializing now...")
+            _log("Warning: OCR reader not initialized, initializing now...")
             self._initialize_ocr_reader()
-            print("✓ OCR reader initialized")
+            _log("✓ OCR reader initialized")
 
     def get_initialization_status(self):
         """
@@ -168,7 +174,7 @@ class VehicleDetectionTracker:
                 columns=["Vehicle_ID", "License_Plate", "Direction_Label", "Timestamp"]
             )
             df.to_excel(self.excel_output_path, index=False, engine="openpyxl")
-            print(f"Created Excel file: {self.excel_output_path}")
+            _log(f"Created Excel file: {self.excel_output_path}")
 
     def _save_to_excel(self, vehicle_id, license_plate, direction_label, timestamp):
         """
@@ -208,7 +214,7 @@ class VehicleDetectionTracker:
                 # Save to Excel
                 df.to_excel(self.excel_output_path, index=False, engine="openpyxl")
         except Exception as e:
-            print(f"Error saving to Excel: {e}")
+            _log(f"Error saving to Excel: {e}")
 
     def _get_most_detected_plate(self, track_id):
         """
@@ -240,7 +246,7 @@ class VehicleDetectionTracker:
         try:
             self.plate_model = initialize_plate_detector("model/LP_detector.pt")
         except Exception as e:
-            print(f"Error loading license plate model: {e}")
+            _log(f"Error loading license plate model: {e}")
             self.plate_model = None
 
     def _preprocess_plate_image(self, plate_image):
@@ -393,12 +399,12 @@ class VehicleDetectionTracker:
             direction_label: Vehicle direction label (if available)
             timestamp: Detection timestamp
         """
-        print(f"Processing plate background for vehicle {track_id}")
+        _log(f"Processing plate background for vehicle {track_id}")
         try:
             # Use sync version for simplicity in streaming mode
             license_plate_info = self._detect_license_plate(vehicle_frame)
             plate_text = license_plate_info.get("text") if license_plate_info else None
-            print(f"Vehicle {track_id} detected plate: {plate_text}")
+            _log(f"Vehicle {track_id} detected plate: {plate_text}")
             if plate_text and plate_text != "unknown":
                 # Update most recent plate for display
                 self.vehicle_plates[track_id] = plate_text
@@ -422,13 +428,13 @@ class VehicleDetectionTracker:
                     if track_id not in _vehicle_telegram_sent:
                         filename = f"screenshots/vehicle_{plate_text}.png"
                         cv2.imwrite(filename, vehicle_frame)
-                        print(f"Sending Telegram notification for vehicle {track_id}...")
+                        _log(f"Sending Telegram notification for vehicle {track_id}...")
                         send_notify_to_telegram(
                             plate_text, direction_label, timestamp, image_path=filename
                         )
                         _vehicle_telegram_sent.add(track_id)
         except Exception as e:
-            print(f"Background plate detection error for vehicle {track_id}: {e}")
+            _log(f"Background plate detection error for vehicle {track_id}: {e}")
 
     def process_frame_streaming(self, frame, frame_timestamp):
         """
@@ -485,7 +491,7 @@ class VehicleDetectionTracker:
                     filename = f"screenshots/vehicle_frame_{timestamp_str}.png"
                     cv2.imwrite(filename, vehicle_frame)
                 except Exception as e:
-                    print(f"Error saving brightened frame: {e}")
+                    _log(f"Error saving brightened frame: {e}")
 
                 # Update last seen
                 self.vehicle_last_seen[track_id] = frame_timestamp
@@ -606,23 +612,23 @@ class VehicleDetectionTracker:
                 cap = create_capture(video_path)
 
                 if not cap.isOpened():
-                    print(f"Không thể mở camera/video stream: {video_path}")
+                    _log(f"Không thể mở camera/video stream: {video_path}")
                     consecutive_failures += 1
 
                     # Send a Telegram warning (only once per outage) to avoid spamming
                     try:
                         if not getattr(self, "_stream_notify_sent", False):
                             warn_msg = f"Không thể mở camera/video stream: {video_path} (attempt {consecutive_failures})"
-                            print(warn_msg)
+                            _log(warn_msg)
                             # Reuse existing notify helper: license_plate and direction are used to build message
                             send_warning_to_telegram(warn_msg)
                             self._stream_notify_sent = True
                     except Exception as e:
-                        print(f"Failed to send Telegram warning: {e}")
+                        _log(f"Failed to send Telegram warning: {e}")
 
                     if consecutive_failures >= 10:
                         warn_msg = f"Không thể kết nối sau nhiều lần thử. Kiểm tra đường dẫn RTSP hoặc kết nối mạng."
-                        print(warn_msg)
+                        _log(warn_msg)
                         send_warning_to_telegram(warn_msg)
                         self._stream_notify_sent = True
                         break
@@ -635,7 +641,7 @@ class VehicleDetectionTracker:
 
                     # For MP4 files, exit immediately when video ends
                     if is_mp4_file:
-                        print("Video playback completed.")
+                        _log("Video playback completed.")
                         break
 
                     if consecutive_failures >= max_consecutive_failures:
@@ -665,7 +671,7 @@ class VehicleDetectionTracker:
                 try:
                     display_frame = self.process_frame_streaming(frame, timestamp)
                 except Exception as e:
-                    print(f"Lỗi xử lý frame: {e}")
+                    _log(f"Lỗi xử lý frame: {e}")
                     continue
 
                 if display_window:
@@ -684,20 +690,20 @@ class VehicleDetectionTracker:
                     or "ref with poc" in error_msg
                 ):
                     # Codec error - just skip this frame and continue
-                    print(f"Lỗi codec (bỏ qua frame): {e}")
+                    _log(f"Lỗi codec (bỏ qua frame): {e}")
                     consecutive_failures += 1
                     if consecutive_failures >= max_consecutive_failures:
-                        print("Quá nhiều lỗi codec liên tiếp. Đang thử kết nối lại...")
+                        _log("Quá nhiều lỗi codec liên tiếp. Đang thử kết nối lại...")
                         cap.release()
                         cap = None
                         consecutive_failures = 0
                     continue
                 else:
                     # Other errors - might need reconnect
-                    print(f"Lỗi không mong muốn: {e}")
+                    _log(f"Lỗi không mong muốn: {e}")
                     consecutive_failures += 1
                     if consecutive_failures >= 10:
-                        print("Đang thử kết nối lại sau lỗi...")
+                        _log("Đang thử kết nối lại sau lỗi...")
                         cap.release()
                         cap = None
                         consecutive_failures = 0
@@ -709,7 +715,7 @@ class VehicleDetectionTracker:
             if display_window:
                 cv2.destroyAllWindows()
         except Exception as e:
-            print(f"Lỗi khi cleanup: {e}")
+            _log(f"Lỗi khi cleanup: {e}")
 
     def cleanup(self):
         """

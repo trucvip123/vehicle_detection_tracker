@@ -37,11 +37,10 @@ def send_notify_to_telegram(license_plate, direction, timestamp=None, image_path
     CHAT_ID = str(CHAT_ID)
 
     # Map some direction labels to Vietnamese phrases
-    if direction == "Top":
+    if "top" in direction.lower():
         direction = "ra khỏi"
-    elif direction == "Bottom":
+    elif "bottom" in direction.lower():
         direction = "vào"
-
     # Build message and strip leading/trailing whitespace
     message = f"Phát hiện biển số xe {license_plate} đi {direction} khu vực mỏ lúc {timestamp} !".strip()
 
@@ -115,12 +114,6 @@ def send_warning_to_telegram(warning_message: str):
     CHAT_ID = os.getenv("TELEGRAM_GROUP_ID", "-4668166355")  # for group
     # Ensure chat_id is string (Telegram API accepts both string and int)
     CHAT_ID = str(CHAT_ID)
-
-    # Map some direction labels to Vietnamese phrases
-    if direction == "Top":
-        direction = "ra khỏi"
-    elif direction == "Bottom":
-        direction = "vào"
 
     # Build message and strip leading/trailing whitespace
     message = f"{warning_message} !".strip()

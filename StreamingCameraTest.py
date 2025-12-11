@@ -8,20 +8,20 @@ from VehicleDetectionTracker.VehicleDetectionTracker import VehicleDetectionTrac
 
 def main():
     # Initialize tracker
+    # Để tránh mờ hình, không resize (giữ nguyên kích thước gốc từ camera/RTSP).
     tracker = VehicleDetectionTracker(
-        stream_frame_size=(1280, 720)
+        stream_frame_size=(1920, 1080)
     )  # Resize frames to 1280x720 for performance
 
     # Option 1: Process camera/webcam stream (press 'q' to quit)
     print("Starting camera stream... (Press 'q' to quit)")
     RTSP_SOURCE = "rtsp://admin:MOVYKV@aicamera.gotdns.ch:554/Streaming/Channels/101"
-    VIDEO_SOURCE = r"video\0312.mp4"
+    VIDEO_SOURCE = r"video\d.mp4"
 
     tracker.process_video_streaming(RTSP_SOURCE)  # 0 for webcam, or use video file path
 
     # Cleanup
     tracker.cleanup()
-
 
 if __name__ == "__main__":
     main()
