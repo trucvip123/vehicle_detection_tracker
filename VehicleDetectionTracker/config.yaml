@@ -1,0 +1,151 @@
+# Vehicle Detection Tracker Configuration
+# Cấu hình các tham số cho hệ thống phát hiện và theo dõi phương tiện
+
+# ============================================
+# YOLO Vehicle Detection Settings
+# ============================================
+detection:
+  # Confidence threshold (0.0 - 1.0)
+  # Giá trị thấp hơn = phát hiện nhiều hơn nhưng có thể có false positives
+  # Giá trị cao hơn = chính xác hơn nhưng có thể bỏ sót một số phương tiện
+  confidence: 0.4
+  
+  # IoU (Intersection over Union) threshold cho NMS (Non-Maximum Suppression)
+  # Giá trị thấp hơn = loại bỏ nhiều box trùng lặp hơn
+  # Giá trị cao hơn = giữ lại nhiều box hơn
+  iou: 0.45
+  
+  # Kích thước ảnh xử lý (pixels)
+  # Giá trị lớn hơn = chính xác hơn nhưng chậm hơn
+  # Các giá trị khuyến nghị: 640 (nhanh), 1280 (cân bằng), 1920 (chính xác cao)
+  image_size: 1280
+  
+  # COCO class IDs để phát hiện
+  # 2 = car, 3 = motorcycle, 5 = bus, 6 = train, 7 = truck, 8 = boat
+  # Loại bỏ motorcycle (3) để chỉ phát hiện xe 4 bánh trở lên
+  vehicle_classes: [2, 5, 6, 7, 8]
+
+# ============================================
+# Tracking Settings
+# ============================================
+tracking:
+  # Tracker type: "bytetrack.yaml", "botsort.yaml", "ocsort.yaml"
+  tracker_type: "bytetrack.yaml"
+  
+  # Số lượng vị trí tối đa lưu trong lịch sử tracking
+  max_history_length: 30
+
+# ============================================
+# License Plate Detection Settings
+# ============================================
+plate_detection:
+  # Kích thước ảnh xử lý cho plate detector (pixels)
+  image_size: 640
+  
+  # Chiều rộng tối thiểu của biển số (pixels)
+  # Biển số nhỏ hơn sẽ bị loại bỏ
+  min_width: 40
+  
+  # Chiều cao tối thiểu của biển số (pixels)
+  min_height: 20
+
+# ============================================
+# OCR Settings
+# ============================================
+ocr:
+  # Confidence threshold cho OCR (0.0 - 1.0)
+  # Giá trị thấp hơn = chấp nhận nhiều kết quả hơn
+  confidence_threshold: 0.3
+  
+  # Độ dài tối thiểu của biển số (số ký tự)
+  min_length: 6
+  
+  # Độ dài tối đa của biển số (số ký tự)
+  max_length: 15
+
+# ============================================
+# RTSP Stream Settings
+# ============================================
+rtsp:
+  # Số lần thử kết nối lại tối đa (0 = vô hạn)
+  max_reconnect_attempts: 10
+  
+  # Thời gian chờ giữa các lần thử kết nối lại (giây)
+  reconnect_delay: 1
+  
+  # Timeout mở stream (milliseconds)
+  open_timeout_ms: 5000
+  
+  # Timeout đọc frame (milliseconds)
+  read_timeout_ms: 5000
+  
+  # Số lần lỗi liên tiếp tối đa trước khi dừng
+  max_consecutive_failures: 10
+
+# ============================================
+# Telegram Bot Settings
+# ============================================
+telegram:
+  # Số lần thử lại tối đa khi gửi thông báo
+  max_retries: 3
+  
+  # Timeout cho mỗi request (giây)
+  request_timeout: 15
+  
+  # Thời gian chờ giữa các lần thử lại (giây)
+  # Áp dụng exponential backoff
+  retry_delays: [2, 4, 8]
+  
+  # Chỉ retry 1 lần cho lỗi DNS (vì thường không tự khắc phục)
+  dns_retry_delay: 2
+
+# ============================================
+# Threading Settings
+# ============================================
+threading:
+  # Số lượng worker threads cho background tasks
+  max_workers: 4
+
+# ============================================
+# File Paths
+# ============================================
+paths:
+  # Đường dẫn đến model YOLO vehicle detection
+  yolo_model: "yolov8n.pt"
+  
+  # Đường dẫn đến model license plate detector
+  plate_model: "model/LP_detector.pt"
+  
+  # Thư mục lưu screenshots
+  screenshots_dir: "screenshots"
+  
+  # File Excel lưu dữ liệu
+  excel_output: "vehicle_data.xlsx"
+
+# ============================================
+# Display Settings
+# ============================================
+display:
+  # Hiển thị bounding boxes trên phương tiện trong streaming mode
+  show_vehicle_boxes: false
+  
+  # Hiển thị license plates ở góc màn hình
+  show_plates_in_corner: true
+  
+  # Kích thước frame mục tiêu cho streaming (width, height)
+  # null = không resize, giữ nguyên kích thước gốc
+  stream_frame_size: null  # Ví dụ: [1280, 720]
+
+# ============================================
+# Advanced Settings
+# ============================================
+advanced:
+  # Khởi tạo tất cả models ngay từ đầu (True) hay lazy loading (False)
+  initialize_all_models: true
+  
+  # Gửi thông báo Telegram cho mỗi phương tiện (True) hay chỉ một lần (False)
+  send_telegram_notification: true
+  
+  # Số lượng frame tối thiểu trước khi xử lý plate detection
+  min_frames_for_plate_detection: 5
+

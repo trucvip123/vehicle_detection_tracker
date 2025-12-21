@@ -1,0 +1,42 @@
+# Core Computer Vision Libraries
+opencv-python
+imutils
+numpy
+
+# Deep Learning Frameworks - GPU Version
+# PyTorch với CUDA 12.1 support (tương thích với CUDA 12.6 driver)
+# Cài đặt bằng lệnh: pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+# Hoặc xem https://pytorch.org/get-started/locally/ để chọn version phù hợp
+# Lưu ý: Không dùng pip install torch trực tiếp từ file này, dùng --index-url
+torch>=2.0.0
+torchvision>=0.15.0
+torchaudio>=2.0.0
+ultralytics
+tensorflow
+seaborn
+
+# Tracking dependencies for ultralytics
+lap  # Linear Assignment Problem solver for BYTETracker
+filterpy  # Kalman filter for tracking (if using other trackers)
+
+# OCR Libraries - GPU Version
+# PaddlePaddle với GPU support
+# Cài đặt từ: https://www.paddlepaddle.org.cn/install/quick
+# Ví dụ cho CUDA 11.2: python -m pip install paddlepaddle-gpu==2.5.2.post112 -f https://www.paddlepaddle.org.cn/whl/windows/mkl/avx/stable.html
+# Ví dụ cho CUDA 11.7: python -m pip install paddlepaddle-gpu==2.5.2.post117 -f https://www.paddlepaddle.org.cn/whl/windows/mkl/avx/stable.html
+# Lưu ý: paddlepaddle-gpu cần cài riêng từ website, không cài qua pip install
+paddleocr
+paddlex
+Pillow
+
+# Data Processing
+pandas
+openpyxl
+
+# HTTP Requests (for Telegram bot)
+requests
+
+# YOLOv5 for license plate detection
+# YOLOv5 will be loaded via torch.hub from local yolov5 repository
+# Ensure yolov5 folder exists in the project root or install separately if needed
+

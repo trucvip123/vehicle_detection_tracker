@@ -27,6 +27,7 @@ class PaddleOCRWrapper:
         lite=False,
         det_model_dir=None,
         rec_model_dir=None,
+        use_gpu=None,  # None = auto-detect, True = force GPU, False = force CPU
     ):
         """
         Khởi tạo PaddleOCR
@@ -42,6 +43,7 @@ class PaddleOCRWrapper:
         self.lite = lite
         self.det_model_dir = det_model_dir
         self.rec_model_dir = rec_model_dir
+        self.use_gpu = use_gpu  # Lưu use_gpu parameter
 
         # Khởi tạo PaddleOCR
         self._init_ocr()
@@ -55,6 +57,32 @@ class PaddleOCRWrapper:
                 use_angle_cls=self.use_angle_cls,
             )
 
+            # Phiên bản PaddleOCR mới không hỗ trợ tham số use_gpu trực tiếp
+            # PaddleOCR sẽ tự động phát hiện GPU dựa trên PaddlePaddle được cài đặt
+            # Kiểm tra và log GPU status (chỉ để thông báo)
+            device_info = "auto (PaddleOCR tự phát hiện)"
+            try:
+                import paddle
+                # Kiểm tra xem PaddlePaddle có được compile với CUDA không
+                if paddle.device.is_compiled_with_cuda():
+                    print("✓ PaddleOCR: PaddlePaddle hỗ trợ GPU, sẽ tự động sử dụng GPU nếu có")
+                    device_info = "GPU (auto-detected)"
+                else:
+                    print("✓ PaddleOCR: PaddlePaddle được compile cho CPU, sử dụng CPU")
+                    device_info = "CPU"
+            except Exception:
+                # Nếu không import được paddle, để PaddleOCR tự phát hiện
+                print("✓ PaddleOCR: PaddleOCR sẽ tự động chọn device (CPU hoặc GPU)")
+            
+            # Lưu ý: use_gpu parameter chỉ để thông báo, không ảnh hưởng đến PaddleOCR
+            # PaddleOCR mới tự động phát hiện dựa trên PaddlePaddle được cài đặt
+            if self.use_gpu is False:
+                print("⚠ PaddleOCR: Lưu ý - use_gpu=False được chỉ định nhưng PaddleOCR mới tự động phát hiện device")
+                device_info = "CPU (requested, nhưng PaddleOCR tự quyết định)"
+            elif self.use_gpu is True:
+                print("✓ PaddleOCR: Cố gắng sử dụng GPU (nếu PaddlePaddle-GPU được cài đặt)")
+                device_info = "GPU (requested)"
+
             # Bật cấu hình "lite" nếu người dùng yêu cầu
             # - Ưu tiên dùng model dir nhỏ nếu được cung cấp và tồn tại
             # - Nếu không, vẫn dùng mobile models mặc định của PaddleOCR
@@ -67,13 +95,15 @@ class PaddleOCRWrapper:
                     ocr_kwargs["rec_model_dir"] = self.rec_model_dir
                 # Sử dụng phiên bản mobile của PP-OCR (nhanh/nhẹ)
                 ocr_kwargs["ocr_version"] = "PP-OCRv3"
-                # Một số tinh chỉnh nhẹ cho CPU
-                # ocr_kwargs['use_gpu'] = False
+                # Set cpu_threads cho CPU mode (không ảnh hưởng nếu dùng GPU)
                 ocr_kwargs["cpu_threads"] = 4
 
             # Khởi tạo PaddleOCR với tham số đã cấu hình
+            # Lưu ý: KHÔNG truyền use_gpu vào ocr_kwargs vì PaddleOCR mới không hỗ trợ tham số này
+            # PaddleOCR sẽ tự động sử dụng GPU nếu PaddlePaddle-GPU được cài đặt
             self.ocr = PaddleOCR(**ocr_kwargs)
-            print(f"OK: PaddleOCR initialized successfully (lang={self.lang})")
+            print(f"OK: PaddleOCR initialized successfully (lang={self.lang}, device={device_info})")
+                    
         except Exception as e:
             print(f"ERROR: Error initializing PaddleOCR: {e}")
             raise
@@ -497,6 +527,7 @@ def create_paddleocr_reader(
     lite=False,
     det_model_dir=None,
     rec_model_dir=None,
+    use_gpu=None,
 ):
     """
     Tạo PaddleOCR reader
@@ -516,6 +547,7 @@ def create_paddleocr_reader(
         lite=lite,
         det_model_dir=det_model_dir,
         rec_model_dir=rec_model_dir,
+        use_gpu=use_gpu,
     )
 
 
@@ -527,6 +559,7 @@ def load_paddleocr_model(
     lite=False,
     det_model_dir=None,
     rec_model_dir=None,
+    use_gpu=None,
 ):
     """
     Load PaddleOCR model (alias cho create_paddleocr_reader)
@@ -538,4 +571,5 @@ def load_paddleocr_model(
         lite=lite,
         det_model_dir=det_model_dir,
         rec_model_dir=rec_model_dir,
+        use_gpu=use_gpu,
     )

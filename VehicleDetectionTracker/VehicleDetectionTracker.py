@@ -10,6 +10,7 @@ import time
 from ultralytics import YOLO
 import numpy as np
 from ultralytics.utils.plotting import colors
+import torch
 
 from datetime import datetime
 import os
@@ -21,11 +22,34 @@ from VehicleDetectionTracker.plate_utils import (
     detect_license_plate_sync
 )
 from VehicleDetectionTracker.utils.send_bot import send_notify_to_telegram, send_warning_to_telegram
+from VehicleDetectionTracker.config_loader import get_config, get_detection_config, get_tracking_config, get_plate_detection_config, get_rtsp_config, get_threading_config, get_paths_config, get_display_config, get_advanced_config
 import logging
 
 logging.getLogger("ultralytics").setLevel(
     logging.WARNING
 )  # Suppress ultralytics logging
+
+
+def _check_cuda_available():
+    """Kiểm tra xem CUDA có sẵn và có GPU không"""
+    cuda_available = torch.cuda.is_available()
+    if cuda_available:
+        gpu_count = torch.cuda.device_count()
+        gpu_name = torch.cuda.get_device_name(0)
+        return True, gpu_count, gpu_name
+    return False, 0, None
+
+
+def _get_device():
+    """Trả về device phù hợp (cuda hoặc cpu)"""
+    if torch.cuda.is_available():
+        device = torch.device('cuda')
+        _log(f"✓ GPU detected: {torch.cuda.get_device_name(0)}")
+        _log(f"✓ CUDA version: {torch.version.cuda}")
+        return device, True
+    else:
+        _log("⚠ GPU không khả dụng, sử dụng CPU")
+        return torch.device('cpu'), False
 
 # Global set to track vehicles that have already sent Telegram notifications
 # This is shared across all threads to prevent duplicate notifications
@@ -58,15 +82,34 @@ class VehicleDetectionTracker:
                                          immediately. If False, use lazy loading for OCR.
         """
         _log("Initializing Vehicle Detection Tracker...")
-
+        
+        # Load config
+        self.config = get_config()
+        paths_config = get_paths_config()
+        display_config = get_display_config()
+        advanced_config = get_advanced_config()
+        
+        # Override với tham số nếu được cung cấp, nếu không dùng từ config
+        model_path = model_path or paths_config.get('yolo_model', 'yolov8n.pt')
+        excel_output_path = excel_output_path or paths_config.get('excel_output', 'vehicle_data.xlsx')
+        initialize_all_models = initialize_all_models if initialize_all_models is not None else advanced_config.get('initialize_all_models', True)
+        stream_frame_size = stream_frame_size if stream_frame_size is not None else display_config.get('stream_frame_size', None)
+        
+        # Kiểm tra và cấu hình device (GPU/CPU)
+        self.device, self.use_gpu = _get_device()
+        
         # Load the YOLO model (always loaded first)
         _log("Loading YOLO vehicle detection model...")
         self.model = YOLO(model_path)
-        _log("✓ YOLO model loaded")
+        # Chuyển model sang GPU nếu có
+        if self.use_gpu:
+            self.model.to(self.device)
+            _log(f"✓ YOLO model loaded và chuyển sang GPU: {torch.cuda.get_device_name(0)}")
+        else:
+            _log("✓ YOLO model loaded (sử dụng CPU)")
 
         self.track_history = defaultdict(lambda: [])  # History of vehicle tracking
         self.detected_vehicles = set()  # Set of detected vehicles
-        self.color_classifier = None
         self.vehicle_timestamps = defaultdict(
             list
         )  # Keep track of timestamps for each tracked vehicle
@@ -93,7 +136,9 @@ class VehicleDetectionTracker:
         self.stream_frame_size = stream_frame_size
 
         # Thread pool for async operations
-        self._executor = ThreadPoolExecutor(max_workers=4)
+        threading_config = get_threading_config()
+        max_workers = threading_config.get('max_workers', 4)
+        self._executor = ThreadPoolExecutor(max_workers=max_workers)
         # Lock for thread-safe model access
         self._model_lock = threading.Lock()
         # Store detected license plates per vehicle ID for streaming display
@@ -125,7 +170,10 @@ class VehicleDetectionTracker:
         """
         if self.ocr_reader is None:
             self.ocr_reader = create_paddleocr_reader(
-                lang="en", use_angle_cls=True, show_log=False
+                lang="en", 
+                use_angle_cls=True, 
+                show_log=False,
+                use_gpu=self.use_gpu  # Sử dụng GPU nếu có
             )
 
     def ensure_all_models_initialized(self):
@@ -158,12 +206,6 @@ class VehicleDetectionTracker:
             "ocr_reader": self.ocr_reader is not None,
         }
 
-    def _initialize_classifiers(self):
-        """
-        Initialize classifiers (legacy method, now mainly for OCR).
-        """
-        if self.ocr_reader is None:
-            self._initialize_ocr_reader()
 
     def _initialize_excel_file(self):
         """
@@ -244,7 +286,8 @@ class VehicleDetectionTracker:
         """
         # Use centralized initializer in plate_utils
         try:
-            self.plate_model = initialize_plate_detector("model/LP_detector.pt")
+            device_str = 'cuda' if self.use_gpu else 'cpu'
+            self.plate_model = initialize_plate_detector("model/LP_detector.pt", device=device_str)
         except Exception as e:
             _log(f"Error loading license plate model: {e}")
             self.plate_model = None
@@ -261,7 +304,7 @@ class VehicleDetectionTracker:
         """
         return preprocess_plate_image(plate_image)
 
-    def _detect_license_plate(self, vehicle_frame):
+    def _detect_license_plate(self, vehicle_frame, timestamp_str):
         """
         Detect license plate and recognize its text from a vehicle frame.
 
@@ -273,7 +316,7 @@ class VehicleDetectionTracker:
         """
         # Delegate to plate_utils synchronous detector
         return detect_license_plate_sync(
-            self.plate_model, vehicle_frame, self.ocr_reader, self._model_lock
+            self.plate_model, vehicle_frame, self.ocr_reader, self._model_lock, timestamp_str
         )
 
     def _map_direction_to_label(self, direction):
@@ -402,7 +445,7 @@ class VehicleDetectionTracker:
         _log(f"Processing plate background for vehicle {track_id}")
         try:
             # Use sync version for simplicity in streaming mode
-            license_plate_info = self._detect_license_plate(vehicle_frame)
+            license_plate_info = self._detect_license_plate(vehicle_frame, timestamp)
             plate_text = license_plate_info.get("text") if license_plate_info else None
             _log(f"Vehicle {track_id} detected plate: {plate_text}")
             if plate_text and plate_text != "unknown":
@@ -451,16 +494,24 @@ class VehicleDetectionTracker:
         """
         # Quick vehicle detection (no OCR blocking)
         # brightened_frame = self._increase_brightness(frame)
+        # Load config cho detection và tracking
+        detection_config = get_detection_config()
+        tracking_config = get_tracking_config()
+        
         # Filter: chỉ detect vehicles (car, bus, truck) - loại bỏ motorcycle
         # COCO classes: car=2, motorcycle=3, bus=5, truck=7
-        vehicle_classes = [2, 5, 6, 7, 8]  # car, bus, truck (không detect motorcycle)
+        vehicle_classes = detection_config.get('vehicle_classes', [2, 5, 6, 7, 8])
 
         results = self.model.track(
-            frame, persist=True, tracker="bytetrack.yaml", classes=vehicle_classes, verbose=False
+            frame, 
+            persist=True, 
+            tracker=tracking_config.get('tracker_type', 'bytetrack.yaml'), 
+            classes=vehicle_classes, 
+            verbose=False,
+            conf=detection_config.get('confidence', 0.3),
+            iou=detection_config.get('iou', 0.45),
+            imgsz=detection_config.get('image_size', 1280)
         )
-        # print("Results: ", results)
-
-        # display_frame = frame.copy()
 
         # Track currently detected vehicles
         current_track_ids = set()
@@ -503,7 +554,8 @@ class VehicleDetectionTracker:
                     self.track_history[track_id] = []
                 track = self.track_history[track_id]
                 track.append((float(x), float(y)))
-                max_history_length = 30
+                tracking_config = get_tracking_config()
+                max_history_length = tracking_config.get('max_history_length', 30)
                 if len(track) > max_history_length:
                     track.pop(0)
 
@@ -541,7 +593,7 @@ class VehicleDetectionTracker:
                         track_id,
                         vehicle_frame.copy(),  # Copy to avoid frame modification issues
                         direction_label,
-                        frame_timestamp,
+                        timestamp_str,
                     )
 
         # Update missing frame counts for vehicles not detected in this frame
@@ -560,8 +612,8 @@ class VehicleDetectionTracker:
         self,
         video_path,
         display_window=True,
-        max_reconnect_attempts=10,
-        reconnect_delay=1,
+        max_reconnect_attempts=None,
+        reconnect_delay=None,
     ):
         """
         Process video/camera stream with optimized performance and auto-reconnect.
@@ -572,9 +624,16 @@ class VehicleDetectionTracker:
         Args:
             video_path (str or int): Path to video file or camera index (0 for webcam), or RTSP URL
             display_window (bool): Whether to display the video window
-            max_reconnect_attempts (int): Maximum number of reconnect attempts (0 for infinite)
-            reconnect_delay (int): Delay in seconds between reconnect attempts
+            max_reconnect_attempts (int): Maximum number of reconnect attempts (0 for infinite). If None, uses config.
+            reconnect_delay (int): Delay in seconds between reconnect attempts. If None, uses config.
         """
+        # Load RTSP config
+        rtsp_config = get_rtsp_config()
+        if max_reconnect_attempts is None:
+            max_reconnect_attempts = rtsp_config.get('max_reconnect_attempts', 10)
+        if reconnect_delay is None:
+            reconnect_delay = rtsp_config.get('reconnect_delay', 1)
+        
         # Check if this is an MP4 file (play once, no replay)
         is_mp4_file = isinstance(video_path, str) and video_path.lower().endswith(
             ".mp4"
@@ -586,19 +645,18 @@ class VehicleDetectionTracker:
 
             # Optimize for RTSP streams (reduce buffering, improve latency)
             if isinstance(video_path, str) and video_path.startswith("rtsp://"):
+                rtsp_config = get_rtsp_config()
                 cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Minimize buffer to reduce latency
                 cap.set(cv2.CAP_PROP_FPS, 30)  # Set expected FPS
                 # Set timeout for RTSP (in milliseconds)
-                cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 5000)
-                cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 5000)
+                cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, rtsp_config.get('open_timeout_ms', 5000))
+                cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, rtsp_config.get('read_timeout_ms', 5000))
 
             return cap
 
         cap = None
         consecutive_failures = 0
-        max_consecutive_failures = (
-            30  # Allow some consecutive failures before reconnect
-        )
+        max_consecutive_failures = rtsp_config.get('max_consecutive_failures', 10)
 
         while True:
             # Create or recreate capture
@@ -626,7 +684,7 @@ class VehicleDetectionTracker:
                     except Exception as e:
                         _log(f"Failed to send Telegram warning: {e}")
 
-                    if consecutive_failures >= 10:
+                    if consecutive_failures >= 20:
                         warn_msg = f"Không thể kết nối sau nhiều lần thử. Kiểm tra đường dẫn RTSP hoặc kết nối mạng."
                         _log(warn_msg)
                         send_warning_to_telegram(warn_msg)
@@ -675,7 +733,18 @@ class VehicleDetectionTracker:
                     continue
 
                 if display_window:
-                    cv2.imshow("Vehicle Detection - Streaming Mode", display_frame)
+                    # Resize display frame to constant size for consistent display
+                    display_size = (1280, 720)
+                    if display_frame is not None:
+                        try:
+                            display_frame_resized = cv2.resize(
+                                display_frame, display_size, interpolation=cv2.INTER_AREA
+                            )
+                        except Exception:
+                            display_frame_resized = display_frame
+                    else:
+                        display_frame_resized = display_frame
+                    cv2.imshow("Vehicle Detection - Streaming Mode", display_frame_resized)
 
                 # Break on 'q' key
                 if cv2.waitKey(1) & 0xFF == ord("q"):

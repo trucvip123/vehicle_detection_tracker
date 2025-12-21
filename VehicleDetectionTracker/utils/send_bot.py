@@ -1,5 +1,15 @@
 import os
 import requests
+import time
+from datetime import datetime
+from typing import Optional, Dict
+
+# Try to load config, fallback to defaults if not available
+try:
+    from VehicleDetectionTracker.config_loader import get_telegram_config
+    _use_config = True
+except ImportError:
+    _use_config = False
 
 
 def send_notify_to_telegram(license_plate, direction, timestamp=None, image_path=None):
@@ -41,53 +51,144 @@ def send_notify_to_telegram(license_plate, direction, timestamp=None, image_path
         direction = "ra khỏi"
     elif "bottom" in direction.lower():
         direction = "vào"
+    # Format timestamp for easy reading
+    if timestamp is None:
+        formatted_time = datetime.now().strftime("%H:%M:%S, %d/%m/%Y")
+    elif isinstance(timestamp, datetime):
+        formatted_time = timestamp.strftime("%H:%M:%S, %d/%m/%Y")
+    else:
+        # If timestamp is already a string, try to parse and reformat
+        try:
+            if isinstance(timestamp, str):
+                # Try to parse common formats
+                for fmt in ["%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%d/%m/%Y %H:%M:%S"]:
+                    try:
+                        dt = datetime.strptime(timestamp, fmt)
+                        formatted_time = dt.strftime("%H:%M:%S, %d/%m/%Y")
+                        break
+                    except ValueError:
+                        continue
+                else:
+                    formatted_time = str(timestamp)  # Fallback to original string
+            else:
+                formatted_time = str(timestamp)
+        except Exception:
+            formatted_time = str(timestamp)
+    
     # Build message and strip leading/trailing whitespace
-    message = f"Phát hiện biển số xe {license_plate} đi {direction} khu vực mỏ lúc {timestamp} !".strip()
+    message = f"Phát hiện biển số xe {license_plate} đi {direction} khu vực mỏ lúc {formatted_time} !".strip()
 
-    try:
-        # If image_path is provided, send photo with caption
-        if image_path and os.path.exists(image_path):
-            url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
+    # Retry configuration
+    max_retries = 3
+    base_timeout = 15  # Increased timeout to 15 seconds
+    retry_delays = [2, 4, 8]  # Exponential backoff delays in seconds
+    
+    last_error = None
+    
+    for attempt in range(max_retries):
+        try:
+            # If image_path is provided, send photo with caption
+            if image_path and os.path.exists(image_path):
+                url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
 
-            with open(image_path, "rb") as photo:
-                files = {"photo": photo}
-                payload = {
-                    "chat_id": CHAT_ID,
-                    "caption": message,
-                    "parse_mode": "Markdown",
-                }
+                with open(image_path, "rb") as photo:
+                    files = {"photo": photo}
+                    payload = {
+                        "chat_id": CHAT_ID,
+                        "caption": message,
+                        "parse_mode": "Markdown",
+                    }
 
-                # Use a short timeout so background threads don't hang indefinitely
-                response = requests.post(url, files=files, data=payload, timeout=10)
+                    # Use increased timeout for better reliability
+                    response = requests.post(url, files=files, data=payload, timeout=base_timeout)
+                    response.raise_for_status()
+                    try:
+                        result = response.json()
+                        if attempt > 0:
+                            print(f"[Telegram] Gửi thành công sau {attempt + 1} lần thử")
+                        return result
+                    except ValueError:
+                        return {
+                            "ok": False,
+                            "error": "invalid_json_response",
+                            "status_code": response.status_code,
+                        }
+            else:
+                # Send text message only
+                url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+                payload = {"chat_id": CHAT_ID, "text": message, "parse_mode": "Markdown"}
+
+                response = requests.post(url, json=payload, timeout=base_timeout)
                 response.raise_for_status()
                 try:
-                    return response.json()
+                    result = response.json()
+                    if attempt > 0:
+                        print(f"[Telegram] Gửi thành công sau {attempt + 1} lần thử")
+                    return result
                 except ValueError:
                     return {
                         "ok": False,
                         "error": "invalid_json_response",
                         "status_code": response.status_code,
                     }
-        else:
-            # Send text message only
-            url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-            payload = {"chat_id": CHAT_ID, "text": message, "parse_mode": "Markdown"}
 
-            response = requests.post(url, json=payload, timeout=5)
-            response.raise_for_status()
-            try:
-                return response.json()
-            except ValueError:
-                return {
-                    "ok": False,
-                    "error": "invalid_json_response",
-                    "status_code": response.status_code,
-                }
-
-    except Exception as e:
-        # Don't raise in background tasks; log and return an error dict
-        print(f"send_notify_to_telegram error: {e}")
-        return {"ok": False, "error": str(e)}
+        except requests.exceptions.Timeout as e:
+            last_error = e
+            if attempt < max_retries - 1:
+                delay = retry_delays[attempt]
+                print(f"[Telegram] Timeout kết nối (lần thử {attempt + 1}/{max_retries}), thử lại sau {delay} giây...")
+                time.sleep(delay)
+            else:
+                print(f"[Telegram] ❌ Timeout sau {max_retries} lần thử: {e}")
+                
+        except requests.exceptions.ConnectionError as e:
+            last_error = e
+            error_str = str(e).lower()
+            
+            # Kiểm tra nếu là lỗi DNS (không thể resolve hostname)
+            # Các lỗi DNS thường chứa: "failed to resolve", "getaddrinfo failed", "name resolution"
+            is_dns_error = any(keyword in error_str for keyword in [
+                'failed to resolve', 
+                'getaddrinfo failed', 
+                'name resolution',
+                'nodename nor servname provided',
+                'name or service not known'
+            ])
+            
+            if is_dns_error:
+                # Lỗi DNS không nên retry nhiều vì sẽ không giải quyết được
+                # Chỉ thử lại 1 lần nữa (tổng 2 lần) để đảm bảo không phải tạm thời
+                dns_retry_delay = 2
+                if attempt < 1:  # Chỉ retry 1 lần cho DNS error
+                    delay = dns_retry_delay
+                    print(f"[Telegram] Lỗi DNS (không thể phân giải tên miền) (lần thử {attempt + 1}/2), thử lại sau {delay} giây...")
+                    time.sleep(delay)
+                else:
+                    print(f"[Telegram] ❌ Lỗi DNS: Không thể kết nối đến Telegram API (kiểm tra kết nối internet/DNS)")
+                    print(f"[Telegram] Chi tiết: {e}")
+                    # Không retry nữa, return ngay
+                    return {"ok": False, "error": f"DNS resolution failed: {str(e)}"}
+            else:
+                # Các lỗi kết nối khác (có thể retry)
+                if attempt < max_retries - 1:
+                    delay = retry_delays[attempt]
+                    print(f"[Telegram] Lỗi kết nối (lần thử {attempt + 1}/{max_retries}), thử lại sau {delay} giây...")
+                    time.sleep(delay)
+                else:
+                    print(f"[Telegram] ❌ Không thể kết nối sau {max_retries} lần thử: {e}")
+                
+        except requests.exceptions.RequestException as e:
+            # For other HTTP errors (4xx, 5xx), don't retry as they're likely permanent
+            print(f"[Telegram] ❌ Lỗi HTTP: {e}")
+            return {"ok": False, "error": str(e), "status_code": getattr(e.response, 'status_code', None)}
+            
+        except Exception as e:
+            # For unexpected errors, don't retry
+            print(f"[Telegram] ❌ Lỗi không mong đợi: {e}")
+            return {"ok": False, "error": str(e)}
+    
+    # If we've exhausted all retries
+    return {"ok": False, "error": f"Failed after {max_retries} attempts: {str(last_error)}"}
 
 
 
@@ -118,22 +219,93 @@ def send_warning_to_telegram(warning_message: str):
     # Build message and strip leading/trailing whitespace
     message = f"{warning_message} !".strip()
 
-    try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-        payload = {"chat_id": CHAT_ID, "text": message, "parse_mode": "Markdown"}
-
-        response = requests.post(url, json=payload, timeout=5)
-        response.raise_for_status()
+    # Retry configuration - load from config if available
+    if _use_config:
+        telegram_config = get_telegram_config()
+        max_retries = telegram_config.get('max_retries', 3)
+        base_timeout = telegram_config.get('request_timeout', 15)
+        retry_delays = telegram_config.get('retry_delays', [2, 4, 8])
+        dns_retry_delay = telegram_config.get('dns_retry_delay', 2)
+    else:
+        max_retries = 3
+        base_timeout = 15
+        retry_delays = [2, 4, 8]
+        dns_retry_delay = 2
+    
+    last_error = None
+    
+    for attempt in range(max_retries):
         try:
-            return response.json()
-        except ValueError:
-                    return {
+            url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+            payload = {"chat_id": CHAT_ID, "text": message, "parse_mode": "Markdown"}
+
+            response = requests.post(url, json=payload, timeout=base_timeout)
+            response.raise_for_status()
+            try:
+                result = response.json()
+                if attempt > 0:
+                    print(f"[Telegram] Gửi cảnh báo thành công sau {attempt + 1} lần thử")
+                return result
+            except ValueError:
+                return {
                     "ok": False,
                     "error": "invalid_json_response",
                     "status_code": response.status_code,
                 }
 
-    except Exception as e:
-        # Don't raise in background tasks; log and return an error dict
-        print(f"send_notify_to_telegram error: {e}")
-        return {"ok": False, "error": str(e)}
+        except requests.exceptions.Timeout as e:
+            last_error = e
+            if attempt < max_retries - 1:
+                delay = retry_delays[attempt]
+                print(f"[Telegram] Timeout kết nối (lần thử {attempt + 1}/{max_retries}), thử lại sau {delay} giây...")
+                time.sleep(delay)
+            else:
+                print(f"[Telegram] ❌ Timeout sau {max_retries} lần thử: {e}")
+                
+        except requests.exceptions.ConnectionError as e:
+            last_error = e
+            error_str = str(e).lower()
+            
+            # Kiểm tra nếu là lỗi DNS (không thể resolve hostname)
+            is_dns_error = any(keyword in error_str for keyword in [
+                'failed to resolve', 
+                'getaddrinfo failed', 
+                'name resolution',
+                'nodename nor servname provided',
+                'name or service not known'
+            ])
+            
+            if is_dns_error:
+                # Lỗi DNS không nên retry nhiều vì sẽ không giải quyết được
+                if attempt < 1:  # Chỉ retry 1 lần cho DNS error
+                    delay = dns_retry_delay
+                    print(f"[Telegram] Lỗi DNS (không thể phân giải tên miền) (lần thử {attempt + 1}/2), thử lại sau {delay} giây...")
+                    time.sleep(delay)
+                else:
+                    print(f"[Telegram] ❌ Lỗi DNS: Không thể kết nối đến Telegram API (kiểm tra kết nối internet/DNS)")
+                    print(f"[Telegram] Chi tiết: {e}")
+                    return {"ok": False, "error": f"DNS resolution failed: {str(e)}"}
+            else:
+                # Các lỗi kết nối khác (có thể retry)
+                if attempt < max_retries - 1:
+                    delay = retry_delays[attempt]
+                    print(f"[Telegram] Lỗi kết nối (lần thử {attempt + 1}/{max_retries}), thử lại sau {delay} giây...")
+                    time.sleep(delay)
+                else:
+                    print(f"[Telegram] ❌ Không thể kết nối sau {max_retries} lần thử: {e}")
+                
+        except requests.exceptions.RequestException as e:
+            # For other HTTP errors (4xx, 5xx), don't retry as they're likely permanent
+            print(f"[Telegram] ❌ Lỗi HTTP: {e}")
+            return {"ok": False, "error": str(e), "status_code": getattr(e.response, 'status_code', None)}
+            
+        except Exception as e:
+            # For unexpected errors, don't retry
+            print(f"[Telegram] ❌ Lỗi không mong đợi: {e}")
+            return {"ok": False, "error": str(e)}
+    
+    # If we've exhausted all retries
+    return {"ok": False, "error": f"Failed after {max_retries} attempts: {str(last_error)}"}
+
+
+# send_notify_to_telegram(license_plate="test", direction="top")

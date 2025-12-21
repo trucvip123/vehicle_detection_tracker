@@ -4,6 +4,12 @@ imutils
 numpy
 
 # Deep Learning Frameworks
+# LƯU Ý: Để sử dụng GPU (NVIDIA CUDA), bạn cần cài đặt PyTorch với CUDA support
+# Kiểm tra version CUDA của hệ thống: nvidia-smi
+# Sau đó cài đặt từ https://pytorch.org/get-started/locally/
+# Ví dụ cho CUDA 11.8: pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+# Hoặc cho CUDA 12.1: pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+# Nếu không có GPU, cài đặt bình thường: pip install torch torchvision
 torch
 torchvision
 ultralytics
@@ -26,6 +32,9 @@ openpyxl
 
 # HTTP Requests (for Telegram bot)
 requests
+
+# Configuration
+pyyaml
 
 # YOLOv5 for license plate detection
 # YOLOv5 will be loaded via torch.hub from local yolov5 repository
