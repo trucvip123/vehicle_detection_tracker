@@ -52,31 +52,12 @@ def send_notify_to_telegram(license_plate, direction, timestamp=None, image_path
     elif "bottom" in direction.lower():
         direction = "vào"
     # Format timestamp for easy reading
-    if timestamp is None:
-        formatted_time = datetime.now().strftime("%H:%M:%S, %d/%m/%Y")
-    elif isinstance(timestamp, datetime):
-        formatted_time = timestamp.strftime("%H:%M:%S, %d/%m/%Y")
-    else:
-        # If timestamp is already a string, try to parse and reformat
-        try:
-            if isinstance(timestamp, str):
-                # Try to parse common formats
-                for fmt in ["%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%d/%m/%Y %H:%M:%S"]:
-                    try:
-                        dt = datetime.strptime(timestamp, fmt)
-                        formatted_time = dt.strftime("%H:%M:%S, %d/%m/%Y")
-                        break
-                    except ValueError:
-                        continue
-                else:
-                    formatted_time = str(timestamp)  # Fallback to original string
-            else:
-                formatted_time = str(timestamp)
-        except Exception:
-            formatted_time = str(timestamp)
-    
+    dt = datetime.strptime(timestamp, "%Y%m%d_%H%M%S_%f")
+    formatted_time = dt.strftime("%Y-%m-%d %H:%M:%S")
+
     # Build message and strip leading/trailing whitespace
     message = f"Phát hiện biển số xe {license_plate} đi {direction} khu vực mỏ lúc {formatted_time} !".strip()
+    print(f"[Telegram] Chuẩn bị gửi thông báo: {message}")
 
     # Retry configuration
     max_retries = 3
@@ -189,8 +170,6 @@ def send_notify_to_telegram(license_plate, direction, timestamp=None, image_path
     
     # If we've exhausted all retries
     return {"ok": False, "error": f"Failed after {max_retries} attempts: {str(last_error)}"}
-
-
 
 def send_warning_to_telegram(warning_message: str):
     """

@@ -23,6 +23,7 @@ from VehicleDetectionTracker.plate_utils import (
 )
 from VehicleDetectionTracker.utils.send_bot import send_notify_to_telegram, send_warning_to_telegram
 from VehicleDetectionTracker.config_loader import get_config, get_detection_config, get_tracking_config, get_plate_detection_config, get_rtsp_config, get_threading_config, get_paths_config, get_display_config, get_advanced_config
+from VehicleDetectionTracker.time_scheduler import is_outside_operating_hours, get_time_info
 import logging
 
 logging.getLogger("ultralytics").setLevel(
@@ -620,6 +621,9 @@ class VehicleDetectionTracker:
         Only shows license plates in corner, no vehicle bounding boxes.
         For .mp4 files: plays once and exits (no replay).
         For streams (RTSP, camera): auto-reconnect enabled.
+        
+        Supports operating hours scheduling - only processes stream during specified hours
+        (e.g., only during daytime for license plate reading).
 
         Args:
             video_path (str or int): Path to video file or camera index (0 for webcam), or RTSP URL
@@ -657,8 +661,34 @@ class VehicleDetectionTracker:
         cap = None
         consecutive_failures = 0
         max_consecutive_failures = rtsp_config.get('max_consecutive_failures', 10)
+        last_outside_hours_log = None  # Track last time we logged outside hours message
 
         while True:
+            # Check operating hours
+            if is_outside_operating_hours():
+                time_info = get_time_info()
+                current_time = time_info.get('current_time', 'unknown')
+                
+                # Log outside operating hours message only once per hour
+                now = datetime.now()
+                if last_outside_hours_log is None or (now - last_outside_hours_log).total_seconds() > 3600:
+                    _log(f"⏱ Ngoài giờ vận hành ({current_time}). Chờ giờ vận hành...")
+                    if cap is not None:
+                        cap.release()
+                        cap = None
+                    last_outside_hours_log = now
+                
+                # Sleep for 30 seconds before checking again
+                time.sleep(30)
+                continue
+            
+            # Reset outside hours log when we re-enter operating hours
+            if last_outside_hours_log is not None:
+                time_info = get_time_info()
+                current_time = time_info.get('current_time', 'unknown')
+                _log(f"✓ Bắt đầu giờ vận hành ({current_time}). Khởi động xử lý stream...")
+                last_outside_hours_log = None
+            
             # Create or recreate capture
             if cap is None or not cap.isOpened():
                 time.sleep(reconnect_delay)
