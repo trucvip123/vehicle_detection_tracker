@@ -38,7 +38,7 @@ def initialize_plate_detector(model_path="model/LP_detector.pt", device=None):
         )
 
         # Chuyển model sang GPU nếu cần
-        if device == "cuda" and torch.cuda.is_available():
+        if "cuda" in device and torch.cuda.is_available():
             plate_model.to(device)
             _log(
                 f"[PLATE_DETECTOR] ✓ Model loaded và chuyển sang GPU: {torch.cuda.get_device_name(0)}"

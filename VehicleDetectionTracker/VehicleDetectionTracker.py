@@ -39,7 +39,7 @@ class VehicleDetectionTracker:
         model_path="yolov8n.pt",
         excel_output_path="vehicle_data.xlsx",
         initialize_all_models=True,
-        stream_frame_size=None,
+        use_gpu=None,
     ):
         """
         Initialize the VehicleDetection class.
@@ -48,7 +48,6 @@ class VehicleDetectionTracker:
             model_path (str): Path to the YOLO model file.
             excel_output_path (str): Path to Excel file for saving vehicle data.
             initialize_all_models (bool): If True, initialize all models immediately.
-            stream_frame_size (tuple): Target frame size for resizing.
         """
         log("Initializing Vehicle Detection Tracker...")
 
@@ -68,14 +67,12 @@ class VehicleDetectionTracker:
             if initialize_all_models is not None
             else advanced_config.get("initialize_all_models", True)
         )
-        stream_frame_size = (
-            stream_frame_size
-            if stream_frame_size is not None
-            else display_config.get("stream_frame_size", None)
-        )
 
-        # Get device (GPU/CPU)
-        self.device, self.use_gpu = get_device(log)
+        # Get device (GPU/CPU), allow override by user
+        if use_gpu is not None:
+            self.device, self.use_gpu = ("cuda:0", True) if use_gpu else ("cpu", False)
+        else:
+            self.device, self.use_gpu = get_device(log)
 
         # Load YOLO model
         log("Loading YOLO vehicle detection model...")
@@ -87,7 +84,8 @@ class VehicleDetectionTracker:
             log("✓ YOLO model loaded (using CPU)")
 
         # Stream frame size
-        self.stream_frame_size = stream_frame_size
+        self.stream_frame_size = display_config.get("stream_frame_size", None)
+        print("stream_frame_size:", self.stream_frame_size)
 
         # Thread pool for async operations
         threading_config = get_threading_config()

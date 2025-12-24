@@ -9,9 +9,7 @@ from VehicleDetectionTracker.VehicleDetectionTracker import VehicleDetectionTrac
 def main():
     # Initialize tracker
     # Để tránh mờ hình, không resize (giữ nguyên kích thước gốc từ camera/RTSP).
-    tracker = VehicleDetectionTracker(
-        stream_frame_size=(1920, 1080)
-    )  # Resize frames to 1280x720 for performance
+    tracker = VehicleDetectionTracker()
 
     # Option 1: Process camera/webcam stream (press 'q' to quit)
     print("Starting camera stream... (Press 'q' to quit)")

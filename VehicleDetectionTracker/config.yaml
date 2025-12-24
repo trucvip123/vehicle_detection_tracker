@@ -134,7 +134,7 @@ display:
   
   # Kích thước frame mục tiêu cho streaming (width, height)
   # null = không resize, giữ nguyên kích thước gốc
-  stream_frame_size: null  # Ví dụ: [1280, 720]
+  # stream_frame_size: (1920, 1080)  # Ví dụ: [1280, 720]
 
 # ============================================
 # Operating Hours Settings (Thời gian vận hành)
