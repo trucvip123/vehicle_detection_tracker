@@ -106,6 +106,7 @@ class StreamHandler:
         consecutive_failures = 0
         max_consecutive_failures = rtsp_config.get("max_consecutive_failures", 10)
         last_outside_hours_log = None
+        frame_id = 0
 
         while True:
             # Check operating hours
@@ -171,6 +172,12 @@ class StreamHandler:
                 sys.stderr = NullWriter()
                 try:
                     success, frame = cap.read()
+                    frame_id += 1
+                    if frame_id % 4 != 0:
+                        continue
+                    if frame_id > 1000:
+                        frame_id = 0
+                        continue
                 finally:
                     sys.stderr = _original_stderr
 

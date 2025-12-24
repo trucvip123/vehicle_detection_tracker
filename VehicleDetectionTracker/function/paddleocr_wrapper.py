@@ -336,7 +336,7 @@ class PaddleOCRWrapper:
         # Làm sạch định dạng kiểu 77A33151 -> 77A-331.51
         plate = re.sub(r"^(\d{2}[A-Z])[- ]?(\d{3})(\d{2})$", r"\1-\2.\3", plate)
         # print(f"DEBUG: plate after format: {plate}")
-        if len(plate) < 7:
+        if len(plate) < 8:
             print("merge_ocr_results returning None due to short length: %s", plate)
             return None
         if "-" not in plate:
@@ -383,94 +383,6 @@ class PaddleOCRWrapper:
                 return None
         return self.merge_ocr_results(unique_texts)
 
-        """
-        Format license plate theo pattern XX XXX.XX
-        
-        Args:
-            text (str): Text biển số thô
-            
-        Returns:
-            str: Biển số đã format theo XX XXX.XX
-        """
-        if not text:
-            return text
-
-        # Làm sạch text - giữ lại chữ cái và số
-        text = re.sub(r"[^A-Z0-9]", "", text.upper())
-
-        # Tìm pattern cho biển số VN: chữ cái ở đầu, số ở sau
-        # Pattern: [A-Z]{2,3}[0-9]{3,5}
-        match = re.match(r"^([A-Z]{2,3})([0-9]{3,5})$", text)
-
-        if match:
-            letter_part = match.group(1)[:2]  # Lấy 2 chữ cái đầu
-            number_part = match.group(2)
-
-            # Format theo XX XXX.XX
-            if len(number_part) >= 5:
-                # Format: XX XXX.XX
-                formatted = f"{letter_part} {number_part[:3]}.{number_part[3:5]}"
-            elif len(number_part) >= 3:
-                # Format: XX XXX
-                formatted = f"{letter_part} {number_part[:3]}"
-            else:
-                # Format: XX XXX
-                formatted = f"{letter_part} {number_part}"
-
-            # print(f"DEBUG: Formatted license plate: {formatted}")
-            return formatted
-
-        # Nếu không match pattern, thử tách chữ cái và số
-        letters = re.findall(r"[A-Z]+", text)
-        numbers = re.findall(r"[0-9]+", text)
-
-        if letters and numbers:
-            # Lấy chữ cái đầu tiên (thường là phần đầu của biển số)
-            letter_part = letters[0][:2] if len(letters[0]) >= 2 else letters[0]
-
-            # Lấy số đầu tiên (thường là phần số của biển số)
-            number_part = numbers[0]
-
-            # Format theo XX XXX.XX
-            if len(number_part) >= 5:
-                # Format: XX XXX.XX
-                formatted = f"{letter_part} {number_part[:3]}.{number_part[3:5]}"
-            elif len(number_part) >= 3:
-                # Format: XX XXX
-                formatted = f"{letter_part} {number_part[:3]}"
-            else:
-                # Format: XX XXX
-                formatted = f"{letter_part} {number_part}"
-
-            print(f"DEBUG: Formatted license plate: {formatted}")
-            return formatted
-
-        # Thử pattern khác: số ở đầu, chữ cái ở sau (như 77H)
-        match_reverse = re.match(r"^([0-9]+)([A-Z]+)$", text)
-        if match_reverse:
-            number_part = match_reverse.group(1)
-            letter_part = (
-                match_reverse.group(2)[:2]
-                if len(match_reverse.group(2)) >= 2
-                else match_reverse.group(2)
-            )
-
-            # Format theo XX XXX.XX
-            if len(number_part) >= 5:
-                # Format: XX XXX.XX
-                formatted = f"{letter_part} {number_part[:3]}.{number_part[3:5]}"
-            elif len(number_part) >= 3:
-                # Format: XX XXX
-                formatted = f"{letter_part} {number_part[:3]}"
-            else:
-                # Format: XX XXX
-                formatted = f"{letter_part} {number_part}"
-
-            print(f"DEBUG: Formatted license plate (reverse): {formatted}")
-            return formatted
-
-        # Nếu không thể format, trả về text gốc
-        return text
 
     def _clean_license_plate_text(self, text):
         """

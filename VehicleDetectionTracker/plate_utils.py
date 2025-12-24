@@ -160,12 +160,16 @@ def detect_license_plate_sync(
             return {"text": None, "bbox": None}
 
         # Extract plate image
-        plate_image = vehicle_frame[y1:y2, x1:x2]
+        plate_image = vehicle_frame[y1:y2+5, x1:x2]
         if plate_image.size == 0:
             _log("[PLATE_DETECT] ❌ Plate image size = 0, return None")
             return {"text": None, "bbox": None}
 
         _log(f"[PLATE_DETECT] ✓ Extracted plate image shape: {plate_image.shape}")
+        
+        # Save plate image
+        filename = f"screenshots/license_frame_{timestamp_str}.png"
+        cv2.imwrite(filename, plate_image)
 
         # Check OCR reader
         if ocr_reader is None:
