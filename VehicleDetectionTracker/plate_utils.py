@@ -23,7 +23,10 @@ def initialize_plate_detector(model_path="model/LP_detector.pt", device=None):
     try:
         # Tự động detect device nếu không được chỉ định
         if device is None:
-            device = 'cuda' if torch.cuda.is_available() else 'cpu'
+            device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
+        elif device == 'cuda':
+            # Convert 'cuda' to 'cuda:0' for YOLOv5 compatibility
+            device = 'cuda:0'
         
         plate_model = torch.hub.load(
             "yolov5",

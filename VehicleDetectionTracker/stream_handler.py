@@ -1,10 +1,32 @@
 """Video streaming and processing handler."""
 import cv2
 import time
+import os
+import sys
+import logging
+import torch
 from datetime import datetime
 from VehicleDetectionTracker.config_loader import get_rtsp_config
 from VehicleDetectionTracker.time_scheduler import is_outside_operating_hours, get_time_info
 from VehicleDetectionTracker.utils.send_bot import send_warning_to_telegram
+
+# Suppress FFmpeg warnings completely
+os.environ['FFREPORT'] = 'file=/dev/null'
+os.environ['FFMPEG_SUPPRESS_LOG_LEVEL'] = 'quiet'
+os.environ["OPENCV_FFMPEG_LOGLEVEL"] = "quiet"
+# Enable GPU acceleration for FFmpeg
+os.environ['OPENCV_FFMPEG_CUVID_DECODER'] = '1'
+cv2.setLogLevel(0)
+logging.getLogger('cv2').setLevel(logging.WARNING)
+
+# Redirect stderr to suppress FFmpeg codec messagesân
+class NullWriter:
+    def write(self, s):
+        pass
+    def flush(self):
+        pass
+
+_original_stderr = sys.stderr
 
 
 class StreamHandler:
@@ -15,18 +37,31 @@ class StreamHandler:
         self._stream_notify_sent = False
     
     def create_capture(self, video_path):
-        """Create VideoCapture with optimized settings for RTSP streams."""
-        cap = cv2.VideoCapture(video_path)
-
-        # Optimize for RTSP streams
-        if isinstance(video_path, str) and video_path.startswith("rtsp://"):
-            rtsp_config = get_rtsp_config()
+        """Create VideoCapture with GPU hardware decoding for RTSP streams."""
+        # Suppress FFmpeg warnings during VideoCapture creation
+        sys.stderr = NullWriter()
+        try:
+            # Enable GPU decoding with CUVID (NVIDIA)
+            cap = cv2.VideoCapture(video_path, cv2.CAP_FFMPEG)
+            
+            # Enable hardware acceleration if available
+            try:
+                # Try to enable hardware acceleration (D3D11 on Windows)
+                cap.set(cv2.CAP_PROP_HW_ACCELERATION, cv2.VIDEO_ACCELERATION_D3D11)
+                # self.log("✓ Hardware acceleration enabled for stream decoding")
+            except AttributeError:
+                # VIDEO_ACCELERATION_D3D11 not available, try generic method
+                try:
+                    cap.set(cv2.CAP_PROP_HW_ACCELERATION, 1)
+                    self.log("✓ Hardware acceleration enabled for stream decoding")
+                except Exception as e:
+                    self.log(f"Note: Hardware acceleration not available: {e}")
+            
             cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-            cap.set(cv2.CAP_PROP_FPS, 30)
-            cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, rtsp_config.get('open_timeout_ms', 5000))
-            cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, rtsp_config.get('read_timeout_ms', 5000))
-
-        return cap
+            return cap
+        finally:
+            # Restore stderr
+            sys.stderr = _original_stderr
     
     def process_video_stream(
         self,
@@ -116,7 +151,12 @@ class StreamHandler:
                         break
 
             try:
-                success, frame = cap.read()
+                # Suppress FFmpeg warnings during frame reading
+                sys.stderr = NullWriter()
+                try:
+                    success, frame = cap.read()
+                finally:
+                    sys.stderr = _original_stderr
 
                 if not success or frame is None:
                     consecutive_failures += 1

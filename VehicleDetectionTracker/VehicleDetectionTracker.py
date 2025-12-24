@@ -1,5 +1,6 @@
 import logging
 from concurrent.futures import ThreadPoolExecutor
+import os
 
 from ultralytics import YOLO
 
@@ -18,6 +19,11 @@ from VehicleDetectionTracker.stream_handler import StreamHandler
 from VehicleDetectionTracker.image_utils_helper import draw_plate_text_corner
 
 logging.getLogger("ultralytics").setLevel(logging.WARNING)
+
+# Suppress FFmpeg/HEVC codec warnings
+os.environ['FFREPORT'] = 'file=/dev/null'
+import cv2
+cv2.setLogLevel(0)  # Disable OpenCV logging
 
 
 class VehicleDetectionTracker:
@@ -103,7 +109,7 @@ class VehicleDetectionTracker:
     def _initialize_plate_detector(self):
         """Initialize the license plate detector model."""
         try:
-            device_str = 'cuda' if self.use_gpu else 'cpu'
+            device_str = 'cuda:0' if self.use_gpu else 'cpu'
             self.plate_model = initialize_plate_detector("model/LP_detector.pt", device=device_str)
             self.plate_processor.plate_model = self.plate_model
         except Exception as e:
