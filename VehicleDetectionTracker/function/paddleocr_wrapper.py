@@ -63,9 +63,12 @@ class PaddleOCRWrapper:
             device_info = "auto (PaddleOCR tự phát hiện)"
             try:
                 import paddle
+
                 # Kiểm tra xem PaddlePaddle có được compile với CUDA không
                 if paddle.device.is_compiled_with_cuda():
-                    print("✓ PaddleOCR: PaddlePaddle hỗ trợ GPU, sẽ tự động sử dụng GPU nếu có")
+                    print(
+                        "✓ PaddleOCR: PaddlePaddle hỗ trợ GPU, sẽ tự động sử dụng GPU nếu có"
+                    )
                     device_info = "GPU (auto-detected)"
                 else:
                     print("✓ PaddleOCR: PaddlePaddle được compile cho CPU, sử dụng CPU")
@@ -73,14 +76,18 @@ class PaddleOCRWrapper:
             except Exception:
                 # Nếu không import được paddle, để PaddleOCR tự phát hiện
                 print("✓ PaddleOCR: PaddleOCR sẽ tự động chọn device (CPU hoặc GPU)")
-            
+
             # Lưu ý: use_gpu parameter chỉ để thông báo, không ảnh hưởng đến PaddleOCR
             # PaddleOCR mới tự động phát hiện dựa trên PaddlePaddle được cài đặt
             if self.use_gpu is False:
-                print("⚠ PaddleOCR: Lưu ý - use_gpu=False được chỉ định nhưng PaddleOCR mới tự động phát hiện device")
+                print(
+                    "⚠ PaddleOCR: Lưu ý - use_gpu=False được chỉ định nhưng PaddleOCR mới tự động phát hiện device"
+                )
                 device_info = "CPU (requested, nhưng PaddleOCR tự quyết định)"
             elif self.use_gpu is True:
-                print("✓ PaddleOCR: Cố gắng sử dụng GPU (nếu PaddlePaddle-GPU được cài đặt)")
+                print(
+                    "✓ PaddleOCR: Cố gắng sử dụng GPU (nếu PaddlePaddle-GPU được cài đặt)"
+                )
                 device_info = "GPU (requested)"
 
             # Bật cấu hình "lite" nếu người dùng yêu cầu
@@ -102,8 +109,10 @@ class PaddleOCRWrapper:
             # Lưu ý: KHÔNG truyền use_gpu vào ocr_kwargs vì PaddleOCR mới không hỗ trợ tham số này
             # PaddleOCR sẽ tự động sử dụng GPU nếu PaddlePaddle-GPU được cài đặt
             self.ocr = PaddleOCR(**ocr_kwargs)
-            print(f"OK: PaddleOCR initialized successfully (lang={self.lang}, device={device_info})")
-                    
+            print(
+                f"OK: PaddleOCR initialized successfully (lang={self.lang}, device={device_info})"
+            )
+
         except Exception as e:
             print(f"ERROR: Error initializing PaddleOCR: {e}")
             raise

@@ -15,7 +15,7 @@ def _log(message):
 
 def initialize_plate_detector(model_path="model/LP_detector.pt", device=None):
     """Load and return the license plate detector (yolov5 custom) or None on error.
-    
+
     Args:
         model_path (str): Path to the model file
         device (str): Device to use ('cuda' or 'cpu'). If None, auto-detect.
@@ -23,11 +23,11 @@ def initialize_plate_detector(model_path="model/LP_detector.pt", device=None):
     try:
         # Tự động detect device nếu không được chỉ định
         if device is None:
-            device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
-        elif device == 'cuda':
+            device = "cuda:0" if torch.cuda.is_available() else "cpu"
+        elif device == "cuda":
             # Convert 'cuda' to 'cuda:0' for YOLOv5 compatibility
-            device = 'cuda:0'
-        
+            device = "cuda:0"
+
         plate_model = torch.hub.load(
             "yolov5",
             "custom",
@@ -36,14 +36,16 @@ def initialize_plate_detector(model_path="model/LP_detector.pt", device=None):
             source="local",
             device=device,  # Chỉ định device
         )
-        
+
         # Chuyển model sang GPU nếu cần
-        if device == 'cuda' and torch.cuda.is_available():
+        if device == "cuda" and torch.cuda.is_available():
             plate_model.to(device)
-            _log(f"[PLATE_DETECTOR] ✓ Model loaded và chuyển sang GPU: {torch.cuda.get_device_name(0)}")
+            _log(
+                f"[PLATE_DETECTOR] ✓ Model loaded và chuyển sang GPU: {torch.cuda.get_device_name(0)}"
+            )
         else:
             _log("[PLATE_DETECTOR] ✓ Model loaded (sử dụng CPU)")
-            
+
         return plate_model
     except Exception as e:
         print(f"Error loading license plate model: {e}")
@@ -73,89 +75,103 @@ def _sync_plate_inference(plate_model, vehicle_frame, model_lock, size=None):
     if size is None:
         try:
             from VehicleDetectionTracker.config_loader import get_plate_detection_config
+
             plate_config = get_plate_detection_config()
-            size = plate_config.get('image_size', 640)
+            size = plate_config.get("image_size", 640)
         except:
             size = 640
     with model_lock:
         return plate_model(vehicle_frame, size=size)
 
 
-def detect_license_plate_sync(plate_model, vehicle_frame, ocr_reader, model_lock, timestamp_str):
+def detect_license_plate_sync(
+    plate_model, vehicle_frame, ocr_reader, model_lock, timestamp_str
+):
     """Detect license plate synchronously with detailed logging for debugging."""
     try:
         _log("[PLATE_DETECT] Bắt đầu detect license plate")
-        
+
         # Check plate model
         if plate_model is None:
             _log("[PLATE_DETECT] ❌ plate_model is None, return None")
             return {"text": None, "bbox": None}
-        
-        _log(f"[PLATE_DETECT] Vehicle frame shape: {vehicle_frame.shape if vehicle_frame is not None else 'None'}")
-        
+
+        _log(
+            f"[PLATE_DETECT] Vehicle frame shape: {vehicle_frame.shape if vehicle_frame is not None else 'None'}"
+        )
+
         # Run plate detection inference
         _log("[PLATE_DETECT] Đang chạy plate model inference...")
         results = _sync_plate_inference(plate_model, vehicle_frame, model_lock)
-        
+
         if results is None:
             _log("[PLATE_DETECT] ❌ Inference results is None")
             return {"text": None, "bbox": None}
-        
+
         if not results.pred[0].shape[0]:
             _log("[PLATE_DETECT] ❌ Không có detection nào (pred shape = 0)")
             return {"text": None, "bbox": None}
-        
+
         filename = f"screenshots/vehicle_frame_{timestamp_str}.png"
         cv2.imwrite(filename, vehicle_frame)
 
         pred = results.pred[0]
         num_detections = pred.shape[0]
         _log(f"[PLATE_DETECT] ✓ Tìm thấy {num_detections} detection(s)")
-        
+
         # Get best detection (highest confidence)
         best_det_idx = pred[:, 4].argmax()
         best_det = pred[best_det_idx]
         confidence = float(best_det[4])
         x1, y1, x2, y2 = map(int, best_det[:4].tolist())
-        
-        _log(f"[PLATE_DETECT] Best detection: bbox=({x1},{y1},{x2},{y2}), confidence={confidence:.3f}")
-        
+
+        _log(
+            f"[PLATE_DETECT] Best detection: bbox=({x1},{y1},{x2},{y2}), confidence={confidence:.3f}"
+        )
+
         # Check plate length
         length_plate = x2 - x1
         height_plate = y2 - y1
-        _log(f"[PLATE_DETECT] Plate dimensions: width={length_plate}, height={height_plate}")
-        
+        _log(
+            f"[PLATE_DETECT] Plate dimensions: width={length_plate}, height={height_plate}"
+        )
+
         # Load config cho plate detection
         try:
             from VehicleDetectionTracker.config_loader import get_plate_detection_config
+
             plate_config = get_plate_detection_config()
-            min_width = plate_config.get('min_width', 40)
-            min_height = plate_config.get('min_height', 20)
+            min_width = plate_config.get("min_width", 40)
+            min_height = plate_config.get("min_height", 20)
         except:
             min_width = 40
             min_height = 20
-        
+
         if length_plate < min_width:
-            _log(f"[PLATE_DETECT] ❌ Plate quá nhỏ (width={length_plate} < {min_width}), return None")
+            _log(
+                f"[PLATE_DETECT] ❌ Plate quá nhỏ (width={length_plate} < {min_width}), return None"
+            )
             return {"text": None, "bbox": None}
-        
+
         if height_plate < min_height:
-            _log(f"[PLATE_DETECT] ❌ Plate quá nhỏ (height={height_plate} < {min_height}), return None")
+            _log(
+                f"[PLATE_DETECT] ❌ Plate quá nhỏ (height={height_plate} < {min_height}), return None"
+            )
             return {"text": None, "bbox": None}
-        
+
         # Extract plate image
         plate_image = vehicle_frame[y1:y2, x1:x2]
         if plate_image.size == 0:
             _log("[PLATE_DETECT] ❌ Plate image size = 0, return None")
             return {"text": None, "bbox": None}
-        
+
         _log(f"[PLATE_DETECT] ✓ Extracted plate image shape: {plate_image.shape}")
-        
+
         # Check OCR reader
         if ocr_reader is None:
             _log("[PLATE_DETECT] ⚠ OCR reader is None, return bbox only")
             return {"text": None, "bbox": (x1, y1, x2, y2)}
-        
+
         # Try OCR with different rotations
         _log("[PLATE_DETECT] Bắt đầu OCR với các góc xoay khác nhau...")
         lp = "unknown"
@@ -163,24 +179,31 @@ def detect_license_plate_sync(plate_model, vehicle_frame, ocr_reader, model_lock
             for ct in range(0, 2):
                 try:
                     deskewed_image = utils_rotate.deskew(plate_image, cc, ct)
-                    _log(f"[PLATE_DETECT] OCR attempt: cc={cc}, ct={ct}, deskewed_shape={deskewed_image.shape if deskewed_image is not None else 'None'}")
-                    
+                    _log(
+                        f"[PLATE_DETECT] OCR attempt: cc={cc}, ct={ct}, deskewed_shape={deskewed_image.shape if deskewed_image is not None else 'None'}"
+                    )
+
                     with model_lock:
                         lp = ocr_reader.read_license_plate(deskewed_image)
-                    
+
                     _log(f"[PLATE_DETECT] OCR result (cc={cc}, ct={ct}): '{lp}'")
-                    
+
                     if lp != "unknown" and lp is not None:
-                        _log(f"[PLATE_DETECT] ✓ Tìm thấy biển số: '{lp}' (cc={cc}, ct={ct})")
+                        _log(
+                            f"[PLATE_DETECT] ✓ Tìm thấy biển số: '{lp}' (cc={cc}, ct={ct})"
+                        )
                         return {"text": lp, "bbox": (x1, y1, x2, y2)}
                 except Exception as ocr_error:
                     _log(f"[PLATE_DETECT] ⚠ OCR error (cc={cc}, ct={ct}): {ocr_error}")
-        
-        _log(f"[PLATE_DETECT] ⚠ Không đọc được biển số sau tất cả các lần thử, return: '{lp}'")
+
+        _log(
+            f"[PLATE_DETECT] ⚠ Không đọc được biển số sau tất cả các lần thử, return: '{lp}'"
+        )
         return {"text": lp, "bbox": (x1, y1, x2, y2)}
-        
+
     except Exception as e:
         _log(f"[PLATE_DETECT] ❌ ERROR in license plate detection: {e}")
         import traceback
+
         _log(f"[PLATE_DETECT] Traceback: {traceback.format_exc()}")
         return {"text": None, "bbox": None}

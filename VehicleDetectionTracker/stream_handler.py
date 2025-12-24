@@ -1,4 +1,5 @@
 """Video streaming and processing handler."""
+
 import cv2
 import time
 import os
@@ -7,35 +8,41 @@ import logging
 import torch
 from datetime import datetime
 from VehicleDetectionTracker.config_loader import get_rtsp_config
-from VehicleDetectionTracker.time_scheduler import is_outside_operating_hours, get_time_info
+from VehicleDetectionTracker.time_scheduler import (
+    is_outside_operating_hours,
+    get_time_info,
+)
 from VehicleDetectionTracker.utils.send_bot import send_warning_to_telegram
 
 # Suppress FFmpeg warnings completely
-os.environ['FFREPORT'] = 'file=/dev/null'
-os.environ['FFMPEG_SUPPRESS_LOG_LEVEL'] = 'quiet'
+os.environ["FFREPORT"] = "file=/dev/null"
+os.environ["FFMPEG_SUPPRESS_LOG_LEVEL"] = "quiet"
 os.environ["OPENCV_FFMPEG_LOGLEVEL"] = "quiet"
 # Enable GPU acceleration for FFmpeg
-os.environ['OPENCV_FFMPEG_CUVID_DECODER'] = '1'
+os.environ["OPENCV_FFMPEG_CUVID_DECODER"] = "1"
 cv2.setLogLevel(0)
-logging.getLogger('cv2').setLevel(logging.WARNING)
+logging.getLogger("cv2").setLevel(logging.WARNING)
+
 
 # Redirect stderr to suppress FFmpeg codec messagesân
 class NullWriter:
     def write(self, s):
         pass
+
     def flush(self):
         pass
+
 
 _original_stderr = sys.stderr
 
 
 class StreamHandler:
     """Handles video/camera stream processing."""
-    
+
     def __init__(self, log_func):
         self.log = log_func
         self._stream_notify_sent = False
-    
+
     def create_capture(self, video_path):
         """Create VideoCapture with GPU hardware decoding for RTSP streams."""
         # Suppress FFmpeg warnings during VideoCapture creation
@@ -43,7 +50,7 @@ class StreamHandler:
         try:
             # Enable GPU decoding with CUVID (NVIDIA)
             cap = cv2.VideoCapture(video_path, cv2.CAP_FFMPEG)
-            
+
             # Enable hardware acceleration if available
             try:
                 # Try to enable hardware acceleration (D3D11 on Windows)
@@ -56,13 +63,13 @@ class StreamHandler:
                     self.log("✓ Hardware acceleration enabled for stream decoding")
                 except Exception as e:
                     self.log(f"Note: Hardware acceleration not available: {e}")
-            
+
             cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
             return cap
         finally:
             # Restore stderr
             sys.stderr = _original_stderr
-    
+
     def process_video_stream(
         self,
         video_path,
@@ -87,40 +94,49 @@ class StreamHandler:
         """
         rtsp_config = get_rtsp_config()
         if max_reconnect_attempts is None:
-            max_reconnect_attempts = rtsp_config.get('max_reconnect_attempts', 10)
+            max_reconnect_attempts = rtsp_config.get("max_reconnect_attempts", 10)
         if reconnect_delay is None:
-            reconnect_delay = rtsp_config.get('reconnect_delay', 1)
-        
-        is_mp4_file = isinstance(video_path, str) and video_path.lower().endswith(".mp4")
+            reconnect_delay = rtsp_config.get("reconnect_delay", 1)
+
+        is_mp4_file = isinstance(video_path, str) and video_path.lower().endswith(
+            ".mp4"
+        )
 
         cap = None
         consecutive_failures = 0
-        max_consecutive_failures = rtsp_config.get('max_consecutive_failures', 10)
+        max_consecutive_failures = rtsp_config.get("max_consecutive_failures", 10)
         last_outside_hours_log = None
 
         while True:
             # Check operating hours
             if is_outside_operating_hours():
                 time_info = get_time_info()
-                current_time = time_info.get('current_time', 'unknown')
-                
+                current_time = time_info.get("current_time", "unknown")
+
                 now = datetime.now()
-                if last_outside_hours_log is None or (now - last_outside_hours_log).total_seconds() > 3600:
-                    self.log(f"⏱ Ngoài giờ vận hành ({current_time}). Chờ giờ vận hành...")
+                if (
+                    last_outside_hours_log is None
+                    or (now - last_outside_hours_log).total_seconds() > 3600
+                ):
+                    self.log(
+                        f"⏱ Ngoài giờ vận hành ({current_time}). Chờ giờ vận hành..."
+                    )
                     if cap is not None:
                         cap.release()
                         cap = None
                     last_outside_hours_log = now
-                
+
                 time.sleep(30)
                 continue
-            
+
             if last_outside_hours_log is not None:
                 time_info = get_time_info()
-                current_time = time_info.get('current_time', 'unknown')
-                self.log(f"✓ Bắt đầu giờ vận hành ({current_time}). Khởi động xử lý stream...")
+                current_time = time_info.get("current_time", "unknown")
+                self.log(
+                    f"✓ Bắt đầu giờ vận hành ({current_time}). Khởi động xử lý stream..."
+                )
                 last_outside_hours_log = None
-            
+
             # Create or recreate capture
             if cap is None or not cap.isOpened():
                 time.sleep(reconnect_delay)
@@ -188,7 +204,9 @@ class StreamHandler:
 
                 # Process frame
                 try:
-                    display_frame = frame_processor.process_frame_streaming(frame, timestamp, plate_processor)
+                    display_frame = frame_processor.process_frame_streaming(
+                        frame, timestamp, plate_processor
+                    )
                 except Exception as e:
                     self.log(f"Lỗi xử lý frame: {e}")
                     continue
@@ -198,24 +216,34 @@ class StreamHandler:
                     if display_frame is not None:
                         try:
                             display_frame_resized = cv2.resize(
-                                display_frame, display_size, interpolation=cv2.INTER_AREA
+                                display_frame,
+                                display_size,
+                                interpolation=cv2.INTER_AREA,
                             )
                         except Exception:
                             display_frame_resized = display_frame
                     else:
                         display_frame_resized = display_frame
-                    cv2.imshow("Vehicle Detection - Streaming Mode", display_frame_resized)
+                    cv2.imshow(
+                        "Vehicle Detection - Streaming Mode", display_frame_resized
+                    )
 
                 if cv2.waitKey(1) & 0xFF == ord("q"):
                     break
 
             except Exception as e:
                 error_msg = str(e).lower()
-                if "hevc" in error_msg or "codec" in error_msg or "ref with poc" in error_msg:
+                if (
+                    "hevc" in error_msg
+                    or "codec" in error_msg
+                    or "ref with poc" in error_msg
+                ):
                     self.log(f"Lỗi codec (bỏ qua frame): {e}")
                     consecutive_failures += 1
                     if consecutive_failures >= max_consecutive_failures:
-                        self.log("Quá nhiều lỗi codec liên tiếp. Đang thử kết nối lại...")
+                        self.log(
+                            "Quá nhiều lỗi codec liên tiếp. Đang thử kết nối lại..."
+                        )
                         cap.release()
                         cap = None
                         consecutive_failures = 0

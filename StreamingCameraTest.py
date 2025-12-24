@@ -23,5 +23,6 @@ def main():
     # Cleanup
     tracker.cleanup()
 
+
 if __name__ == "__main__":
     main()

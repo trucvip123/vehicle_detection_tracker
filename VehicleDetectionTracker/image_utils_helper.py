@@ -1,4 +1,5 @@
 """Image processing and encoding utilities."""
+
 import base64
 import cv2
 import numpy as np

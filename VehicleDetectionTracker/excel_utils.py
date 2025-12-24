@@ -1,4 +1,5 @@
 """Excel file handling utilities."""
+
 import os
 import pandas as pd
 import threading
@@ -6,13 +7,13 @@ import threading
 
 class ExcelManager:
     """Thread-safe Excel file manager."""
-    
+
     def __init__(self, excel_output_path, log_func):
         self.excel_output_path = excel_output_path
         self._excel_lock = threading.Lock()
         self.log = log_func
         self._initialize_excel_file()
-    
+
     def _initialize_excel_file(self):
         """Initialize Excel file with headers if it doesn't exist."""
         if not os.path.exists(self.excel_output_path):
@@ -21,7 +22,7 @@ class ExcelManager:
             )
             df.to_excel(self.excel_output_path, index=False, engine="openpyxl")
             self.log(f"Created Excel file: {self.excel_output_path}")
-    
+
     def save_to_excel(self, vehicle_id, license_plate, direction_label, timestamp):
         """
         Save vehicle data to Excel file (thread-safe).

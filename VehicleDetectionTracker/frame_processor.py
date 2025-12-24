@@ -1,24 +1,30 @@
 """Frame detection and tracking processing."""
+
 import math
 import cv2
 from datetime import datetime
 from collections import defaultdict
-from VehicleDetectionTracker.config_loader import get_detection_config, get_tracking_config
+from VehicleDetectionTracker.config_loader import (
+    get_detection_config,
+    get_tracking_config,
+)
 from VehicleDetectionTracker.image_utils_helper import map_direction_to_label
 
 
 class FrameProcessor:
     """Handles vehicle detection and tracking in frames."""
-    
+
     def __init__(self, model, log_func):
         self.model = model
         self.log = log_func
-        
+
         # Tracking data
         self.track_history = defaultdict(lambda: [])
         self.detected_vehicles = set()
-        self.vehicle_timestamps = defaultdict(lambda: {"timestamps": [], "positions": []})
-    
+        self.vehicle_timestamps = defaultdict(
+            lambda: {"timestamps": [], "positions": []}
+        )
+
     def process_frame_streaming(self, frame, frame_timestamp, plate_processor):
         """
         Optimized frame processing for streaming: Fast detection, background OCR.
@@ -35,20 +41,20 @@ class FrameProcessor:
         # Load config for detection and tracking
         detection_config = get_detection_config()
         tracking_config = get_tracking_config()
-        
+
         # Filter: chỉ detect vehicles (car, bus, truck)
         # COCO classes: car=2, motorcycle=3, bus=5, truck=7
-        vehicle_classes = detection_config.get('vehicle_classes', [2, 5, 6, 7, 8])
+        vehicle_classes = detection_config.get("vehicle_classes", [2, 5, 6, 7, 8])
 
         results = self.model.track(
-            frame, 
-            persist=True, 
-            tracker=tracking_config.get('tracker_type', 'bytetrack.yaml'), 
-            classes=vehicle_classes, 
+            frame,
+            persist=True,
+            tracker=tracking_config.get("tracker_type", "bytetrack.yaml"),
+            classes=vehicle_classes,
             verbose=False,
-            conf=detection_config.get('confidence', 0.3),
-            iou=detection_config.get('iou', 0.45),
-            imgsz=detection_config.get('image_size', 1280)
+            conf=detection_config.get("confidence", 0.3),
+            iou=detection_config.get("iou", 0.45),
+            imgsz=detection_config.get("image_size", 1280),
         )
 
         # Track currently detected vehicles
@@ -67,9 +73,9 @@ class FrameProcessor:
             # Update tracking history and calculate directions
             for box, track_id in zip(boxes, track_ids):
                 x, y, w, h = box
-                if w < 240 or h < 100 or y - h/2 < 10:
+                if w < 240 or h < 100 or y - h / 2 < 10:
                     continue
-                
+
                 # Save vehicle frame
                 try:
                     timestamp_str = frame_timestamp.strftime("%Y%m%d_%H%M%S_%f")[:-3]
@@ -95,13 +101,16 @@ class FrameProcessor:
                 track = self.track_history[track_id]
                 track.append((float(x), float(y)))
                 tracking_config = get_tracking_config()
-                max_history_length = tracking_config.get('max_history_length', 30)
+                max_history_length = tracking_config.get("max_history_length", 30)
                 if len(track) > max_history_length:
                     track.pop(0)
 
                 # Update timestamps and positions
                 if track_id not in self.vehicle_timestamps:
-                    self.vehicle_timestamps[track_id] = {"timestamps": [], "positions": []}
+                    self.vehicle_timestamps[track_id] = {
+                        "timestamps": [],
+                        "positions": [],
+                    }
                 self.vehicle_timestamps[track_id]["timestamps"].append(frame_timestamp)
                 self.vehicle_timestamps[track_id]["positions"].append((x, y))
 

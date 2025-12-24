@@ -1,4 +1,5 @@
 """License plate detection and processing utilities."""
+
 import threading
 import cv2
 from VehicleDetectionTracker.plate_utils import detect_license_plate_sync
@@ -18,22 +19,22 @@ def reset_telegram_sent():
 
 class PlateProcessor:
     """Handles license plate detection and tracking."""
-    
+
     def __init__(self, plate_model, ocr_reader, executor, log_func):
         self.plate_model = plate_model
         self.ocr_reader = ocr_reader
         self.executor = executor
         self.log = log_func
-        
+
         # Track detected plates per vehicle
         self.vehicle_plates = {}  # {track_id: plate_text}
         self.vehicle_plate_counts = {}  # {track_id: {plate_text: count}}
         self.vehicle_directions = {}  # {track_id: direction_label}
         self.vehicle_last_seen = {}  # {track_id: timestamp}
         self.vehicle_missing_frames = {}  # {track_id: missing_frame_count}
-        
+
         self._model_lock = threading.Lock()
-    
+
     def get_most_detected_plate(self, track_id):
         """
         Get the license plate with highest detection count for a vehicle.
@@ -54,7 +55,7 @@ class PlateProcessor:
         # Find plate with maximum count
         most_detected_plate = max(plate_counts.items(), key=lambda x: x[1])
         return most_detected_plate
-    
+
     def process_plate_background_sync(
         self, track_id, vehicle_frame, direction_label=None, timestamp=None
     ):
@@ -72,7 +73,11 @@ class PlateProcessor:
         try:
             # Use sync version for simplicity in streaming mode
             license_plate_info = detect_license_plate_sync(
-                self.plate_model, vehicle_frame, self.ocr_reader, self._model_lock, timestamp
+                self.plate_model,
+                vehicle_frame,
+                self.ocr_reader,
+                self._model_lock,
+                timestamp,
             )
             plate_text = license_plate_info.get("text") if license_plate_info else None
             self.log(f"Vehicle {track_id} detected plate: {plate_text}")
@@ -96,22 +101,26 @@ class PlateProcessor:
                 # Update last seen timestamp
                 if timestamp:
                     self.vehicle_last_seen[track_id] = timestamp
-                
+
                 # Send Telegram notification only once per vehicle ID (thread-safe)
                 global _vehicle_telegram_sent, _vehicle_telegram_sent_lock
                 with _vehicle_telegram_sent_lock:
                     if track_id not in _vehicle_telegram_sent:
                         filename = f"screenshots/vehicle_{plate_text}.png"
                         cv2.imwrite(filename, vehicle_frame)
-                        self.log(f"Sending Telegram notification for vehicle {track_id}...")
+                        self.log(
+                            f"Sending Telegram notification for vehicle {track_id}..."
+                        )
                         send_notify_to_telegram(
                             plate_text, direction_label, timestamp, image_path=filename
                         )
                         _vehicle_telegram_sent.add(track_id)
         except Exception as e:
             self.log(f"Background plate detection error for vehicle {track_id}: {e}")
-    
-    def submit_plate_processing(self, track_id, vehicle_frame, direction_label, timestamp_str):
+
+    def submit_plate_processing(
+        self, track_id, vehicle_frame, direction_label, timestamp_str
+    ):
         """Submit plate processing to background executor."""
         if vehicle_frame.size > 0:
             self.executor.submit(

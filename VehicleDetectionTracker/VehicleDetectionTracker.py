@@ -7,7 +7,11 @@ from ultralytics import YOLO
 from VehicleDetectionTracker.function.paddleocr_wrapper import create_paddleocr_reader
 from VehicleDetectionTracker.plate_utils import initialize_plate_detector
 from VehicleDetectionTracker.config_loader import (
-    get_config, get_threading_config, get_paths_config, get_display_config, get_advanced_config
+    get_config,
+    get_threading_config,
+    get_paths_config,
+    get_display_config,
+    get_advanced_config,
 )
 
 from VehicleDetectionTracker.device_utils import get_device
@@ -21,8 +25,9 @@ from VehicleDetectionTracker.image_utils_helper import draw_plate_text_corner
 logging.getLogger("ultralytics").setLevel(logging.WARNING)
 
 # Suppress FFmpeg/HEVC codec warnings
-os.environ['FFREPORT'] = 'file=/dev/null'
+os.environ["FFREPORT"] = "file=/dev/null"
 import cv2
+
 cv2.setLogLevel(0)  # Disable OpenCV logging
 
 
@@ -46,22 +51,32 @@ class VehicleDetectionTracker:
             stream_frame_size (tuple): Target frame size for resizing.
         """
         log("Initializing Vehicle Detection Tracker...")
-        
+
         # Load config
         self.config = get_config()
         paths_config = get_paths_config()
         display_config = get_display_config()
         advanced_config = get_advanced_config()
-        
+
         # Override with parameters
-        model_path = model_path or paths_config.get('yolo_model', 'yolov8n.pt')
-        excel_output_path = excel_output_path or paths_config.get('excel_output', 'vehicle_data.xlsx')
-        initialize_all_models = initialize_all_models if initialize_all_models is not None else advanced_config.get('initialize_all_models', True)
-        stream_frame_size = stream_frame_size if stream_frame_size is not None else display_config.get('stream_frame_size', None)
-        
+        model_path = model_path or paths_config.get("yolo_model", "yolov8n.pt")
+        excel_output_path = excel_output_path or paths_config.get(
+            "excel_output", "vehicle_data.xlsx"
+        )
+        initialize_all_models = (
+            initialize_all_models
+            if initialize_all_models is not None
+            else advanced_config.get("initialize_all_models", True)
+        )
+        stream_frame_size = (
+            stream_frame_size
+            if stream_frame_size is not None
+            else display_config.get("stream_frame_size", None)
+        )
+
         # Get device (GPU/CPU)
         self.device, self.use_gpu = get_device(log)
-        
+
         # Load YOLO model
         log("Loading YOLO vehicle detection model...")
         self.model = YOLO(model_path)
@@ -76,21 +91,23 @@ class VehicleDetectionTracker:
 
         # Thread pool for async operations
         threading_config = get_threading_config()
-        max_workers = threading_config.get('max_workers', 4)
+        max_workers = threading_config.get("max_workers", 4)
         self._executor = ThreadPoolExecutor(max_workers=max_workers)
-        
+
         # Initialize Excel manager
         self.excel_manager = ExcelManager(excel_output_path, log)
-        
+
         # Initialize OCR reader first (before creating plate_processor)
         self.ocr_reader = None
-        
+
         # Initialize processors (with None models first)
         self.plate_model = None
-        self.plate_processor = PlateProcessor(self.plate_model, self.ocr_reader, self._executor, log)
+        self.plate_processor = PlateProcessor(
+            self.plate_model, self.ocr_reader, self._executor, log
+        )
         self.frame_processor = FrameProcessor(self.model, log)
         self.stream_handler = StreamHandler(log)
-        
+
         # Now initialize OCR reader if needed
         if initialize_all_models:
             log("Initializing OCR reader...")
@@ -98,7 +115,7 @@ class VehicleDetectionTracker:
             log("✓ OCR reader initialized")
         else:
             log("⚠ OCR reader will be initialized on first use (lazy loading)")
-        
+
         # Now initialize plate detector
         log("Loading license plate detector model...")
         self._initialize_plate_detector()
@@ -109,8 +126,10 @@ class VehicleDetectionTracker:
     def _initialize_plate_detector(self):
         """Initialize the license plate detector model."""
         try:
-            device_str = 'cuda:0' if self.use_gpu else 'cpu'
-            self.plate_model = initialize_plate_detector("model/LP_detector.pt", device=device_str)
+            device_str = "cuda:0" if self.use_gpu else "cpu"
+            self.plate_model = initialize_plate_detector(
+                "model/LP_detector.pt", device=device_str
+            )
             self.plate_processor.plate_model = self.plate_model
         except Exception as e:
             log(f"Error loading license plate model: {e}")
@@ -120,13 +139,10 @@ class VehicleDetectionTracker:
         """Initialize OCR reader (PaddleOCR)."""
         if self.ocr_reader is None:
             self.ocr_reader = create_paddleocr_reader(
-                lang="en", 
-                use_angle_cls=True, 
-                show_log=False,
-                use_gpu=self.use_gpu
+                lang="en", use_angle_cls=True, show_log=False, use_gpu=self.use_gpu
             )
             # Update plate_processor if it exists
-            if hasattr(self, 'plate_processor') and self.plate_processor:
+            if hasattr(self, "plate_processor") and self.plate_processor:
                 self.plate_processor.ocr_reader = self.ocr_reader
 
     def ensure_all_models_initialized(self):
@@ -165,7 +181,9 @@ class VehicleDetectionTracker:
         display_frame = self.frame_processor.process_frame_streaming(
             frame, frame_timestamp, self.plate_processor
         )
-        return draw_plate_text_corner(display_frame, self.plate_processor.vehicle_plates)
+        return draw_plate_text_corner(
+            display_frame, self.plate_processor.vehicle_plates
+        )
 
     def process_video_streaming(
         self,
