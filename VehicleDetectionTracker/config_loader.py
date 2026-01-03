@@ -76,7 +76,12 @@ class ConfigLoader:
                 "vehicle_classes": [2, 5, 6, 7, 8],
             },
             "tracking": {"tracker_type": "bytetrack.yaml", "max_history_length": 30},
-            "plate_detection": {"image_size": 640, "min_width": 40, "min_height": 20},
+            "plate_detection": {
+                "image_size": 1280,  # Khuyến nghị: 1280 cho license plate detection
+                "min_confidence": 0.25,
+                "min_width": 40,
+                "min_height": 20,
+            },
             "ocr": {"confidence_threshold": 0.3, "min_length": 6, "max_length": 15},
             "rtsp": {
                 "max_reconnect_attempts": 10,

@@ -71,17 +71,34 @@ def _sync_plate_inference(plate_model, vehicle_frame, model_lock, size=None):
     """Run plate model synchronously in a thread-safe way and return results or None."""
     if plate_model is None:
         return None
+    
+    # Check if vehicle_frame is valid
+    if vehicle_frame is None or vehicle_frame.size == 0:
+        _log("[PLATE_INFERENCE] ❌ vehicle_frame is None or empty")
+        return None
+    
     # Load config nếu size không được chỉ định
     if size is None:
         try:
             from VehicleDetectionTracker.config_loader import get_plate_detection_config
 
             plate_config = get_plate_detection_config()
-            size = plate_config.get("image_size", 640)
+            size = plate_config.get("image_size", 1280)  # Default: 1280 cho license plate
         except:
             size = 640
-    with model_lock:
-        return plate_model(vehicle_frame, size=size)
+    
+    try:
+        with model_lock:
+            return plate_model(vehicle_frame, size=size)
+    except Exception as e:
+        _log(f"[PLATE_INFERENCE] ❌ Error during inference: {e}")
+        # Fallback: thử gọi không có size parameter
+        try:
+            with model_lock:
+                return plate_model(vehicle_frame)
+        except Exception as e2:
+            _log(f"[PLATE_INFERENCE] ❌ Fallback inference also failed: {e2}")
+            return None
 
 
 def detect_license_plate_sync(
@@ -138,14 +155,25 @@ def detect_license_plate_sync(
 
         # Load config cho plate detection
         try:
-            from VehicleDetectionTracker.config_loader import get_plate_detection_config
+            from VehicleDetectionTracker.config_loader import (
+                get_plate_detection_config,
+            )
 
             plate_config = get_plate_detection_config()
             min_width = plate_config.get("min_width", 40)
             min_height = plate_config.get("min_height", 20)
+            min_confidence = plate_config.get("min_confidence", 0.25)
         except:
             min_width = 40
             min_height = 20
+            min_confidence = 0.25
+
+        # Check confidence threshold
+        if confidence < min_confidence:
+            _log(
+                f"[PLATE_DETECT] ❌ Confidence quá thấp ({confidence:.3f} < {min_confidence}), return None"
+            )
+            return {"text": None, "bbox": None}
 
         if length_plate < min_width:
             _log(
@@ -159,8 +187,15 @@ def detect_license_plate_sync(
             )
             return {"text": None, "bbox": None}
 
+        # Validate bbox coordinates against frame dimensions để tránh index out of bounds
+        frame_height, frame_width = vehicle_frame.shape[:2]
+        x1 = max(0, min(x1, frame_width - 1))
+        y1 = max(0, min(y1, frame_height - 1))
+        x2 = max(x1 + 1, min(x2, frame_width))
+        y2 = max(y1 + 1, min(y2, frame_height))
+
         # Extract plate image
-        plate_image = vehicle_frame[y1:y2+5, x1:x2]
+        plate_image = vehicle_frame[y1:y2, x1:x2]
         if plate_image.size == 0:
             _log("[PLATE_DETECT] ❌ Plate image size = 0, return None")
             return {"text": None, "bbox": None}
