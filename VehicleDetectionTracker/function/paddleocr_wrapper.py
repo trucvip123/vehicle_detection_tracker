@@ -10,6 +10,13 @@ import re
 import collections
 import logging
 
+# Try to import logging utility
+try:
+    from VehicleDetectionTracker.logging_utils import log as _log_ocr
+except ImportError:
+    def _log_ocr(message, category="ocr"):
+        print(f"[{__import__('datetime').datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {message}")
+
 # Module logger
 logger = logging.getLogger(__name__)
 
@@ -66,27 +73,27 @@ class PaddleOCRWrapper:
 
                 # Kiểm tra xem PaddlePaddle có được compile với CUDA không
                 if paddle.device.is_compiled_with_cuda():
-                    print(
-                        "✓ PaddleOCR: PaddlePaddle hỗ trợ GPU, sẽ tự động sử dụng GPU nếu có"
+                    _log_ocr(
+                        "✓ PaddleOCR: PaddlePaddle hỗ trợ GPU, sẽ tự động sử dụng GPU nếu có", "ocr"
                     )
                     device_info = "GPU (auto-detected)"
                 else:
-                    print("✓ PaddleOCR: PaddlePaddle được compile cho CPU, sử dụng CPU")
+                    _log_ocr("✓ PaddleOCR: PaddlePaddle được compile cho CPU, sử dụng CPU", "ocr")
                     device_info = "CPU"
             except Exception:
                 # Nếu không import được paddle, để PaddleOCR tự phát hiện
-                print("✓ PaddleOCR: PaddleOCR sẽ tự động chọn device (CPU hoặc GPU)")
+                _log_ocr("✓ PaddleOCR: PaddleOCR sẽ tự động chọn device (CPU hoặc GPU)", "ocr")
 
             # Lưu ý: use_gpu parameter chỉ để thông báo, không ảnh hưởng đến PaddleOCR
             # PaddleOCR mới tự động phát hiện dựa trên PaddlePaddle được cài đặt
             if self.use_gpu is False:
-                print(
-                    "⚠ PaddleOCR: Lưu ý - use_gpu=False được chỉ định nhưng PaddleOCR mới tự động phát hiện device"
+                _log_ocr(
+                    "⚠ PaddleOCR: Lưu ý - use_gpu=False được chỉ định nhưng PaddleOCR mới tự động phát hiện device", "ocr"
                 )
                 device_info = "CPU (requested, nhưng PaddleOCR tự quyết định)"
             elif self.use_gpu is True:
-                print(
-                    "✓ PaddleOCR: Cố gắng sử dụng GPU (nếu PaddlePaddle-GPU được cài đặt)"
+                _log_ocr(
+                    "✓ PaddleOCR: Cố gắng sử dụng GPU (nếu PaddlePaddle-GPU được cài đặt)", "ocr"
                 )
                 device_info = "GPU (requested)"
 
@@ -109,12 +116,12 @@ class PaddleOCRWrapper:
             # Lưu ý: KHÔNG truyền use_gpu vào ocr_kwargs vì PaddleOCR mới không hỗ trợ tham số này
             # PaddleOCR sẽ tự động sử dụng GPU nếu PaddlePaddle-GPU được cài đặt
             self.ocr = PaddleOCR(**ocr_kwargs)
-            print(
-                f"OK: PaddleOCR initialized successfully (lang={self.lang}, device={device_info})"
+            _log_ocr(
+                f"OK: PaddleOCR initialized successfully (lang={self.lang}, device={device_info})", "ocr"
             )
 
         except Exception as e:
-            print(f"ERROR: Error initializing PaddleOCR: {e}")
+            _log_ocr(f"ERROR: Error initializing PaddleOCR: {e}", "ocr")
             raise
 
     def read_license_plate(self, image):
@@ -216,12 +223,12 @@ class PaddleOCRWrapper:
                 # Thử kết hợp các kết quả để tạo biển số hoàn chỉnh
                 combined_text = self._combine_license_plate_results(all_text_results)
                 if combined_text:
-                    print(f"DEBUG: Combined OCR result: {combined_text}")
+                    _log_ocr(f"DEBUG: Combined OCR result: {combined_text}", "ocr")
                     return combined_text.upper()
             return "unknown"
 
         except Exception as e:
-            print(f"ERROR: Error reading license plate: {e}")
+            _log_ocr(f"ERROR: Error reading license plate: {e}", "ocr")
             return "unknown"
 
     def _preprocess_image_for_ocr(self, img_array):
@@ -282,7 +289,7 @@ class PaddleOCRWrapper:
             processed_images.append(cv2.cvtColor(morph, cv2.COLOR_GRAY2BGR))
 
         except Exception as e:
-            print(f"DEBUG: Error in preprocessing: {e}")
+            _log_ocr(f"DEBUG: Error in preprocessing: {e}", "ocr")
             # Trả về ảnh gốc nếu có lỗi
             processed_images = [img_array.copy()]
 
@@ -337,7 +344,7 @@ class PaddleOCRWrapper:
         plate = re.sub(r"^(\d{2}[A-Z])[- ]?(\d{3})(\d{2})$", r"\1-\2.\3", plate)
         # print(f"DEBUG: plate after format: {plate}")
         if len(plate) < 8:
-            print("merge_ocr_results returning None due to short length: %s", plate)
+            _log_ocr(f"merge_ocr_results returning None due to short length: {plate}", "ocr")
             return None
         if "-" not in plate:
             return None
@@ -358,13 +365,13 @@ class PaddleOCRWrapper:
 
         # Lấy tất cả text unique với confidence
         unique_results = {}
-        print("text_results:", text_results)
+        _log_ocr(f"text_results: {text_results}", "ocr")
         for text, confidence in text_results:
             if text not in unique_results and confidence > 0.5:
                 unique_results[text] = confidence
 
         unique_texts = list(unique_results.keys())
-        print(f"DEBUG: All OCR results: {unique_texts}")
+        _log_ocr(f"DEBUG: All OCR results: {unique_texts}", "ocr")
         if len(unique_texts) == 0:
             return None
         elif len(unique_texts) == 1:
@@ -377,8 +384,8 @@ class PaddleOCRWrapper:
                 or not license_plate[1].isdigit()
                 or license_plate[2].isdigit()
             ):
-                print(
-                    f"DEBUG: License plate does not format license plate: {license_plate}"
+                _log_ocr(
+                    f"DEBUG: License plate does not format license plate: {license_plate}", "ocr"
                 )
                 return None
         return self.merge_ocr_results(unique_texts)

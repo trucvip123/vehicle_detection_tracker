@@ -85,7 +85,7 @@ class VehicleDetectionTracker:
 
         # Stream frame size
         self.stream_frame_size = display_config.get("stream_frame_size", None)
-        print("stream_frame_size:", self.stream_frame_size)
+        log(f"stream_frame_size: {self.stream_frame_size}")
 
         # Thread pool for async operations
         threading_config = get_threading_config()

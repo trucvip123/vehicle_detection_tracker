@@ -1,0 +1,14 @@
+[2026-01-05 10:39:51] [PLATE_DETECTOR] ✓ Model loaded và chuyển sang GPU: NVIDIA GeForce GTX 1650
+[2026-01-05 10:41:19] [PLATE_DETECTOR] ✓ Model loaded và chuyển sang GPU: NVIDIA GeForce GTX 1650
+[2026-01-05 10:47:43] [PLATE_DETECTOR] ✓ Model loaded (sử dụng CPU)
+[2026-01-05 10:47:46] [PLATE_DETECT] Bắt đầu detect license plate
+[2026-01-05 10:47:46] [PLATE_DETECT] Vehicle frame shape: (799, 635, 3)
+[2026-01-05 10:47:46] [PLATE_DETECT] Đang chạy plate model inference...
+[2026-01-05 10:47:47] [PLATE_DETECT] ✓ Tìm thấy 1 detection(s)
+[2026-01-05 10:47:47] [PLATE_DETECT] Best detection: bbox=(266,672,392,706), confidence=0.801
+[2026-01-05 10:47:47] [PLATE_DETECT] Plate dimensions: width=126, height=34
+[2026-01-05 10:47:47] [PLATE_DETECT] ✓ Extracted plate image shape: (34, 126, 3)
+[2026-01-05 10:47:47] [PLATE_DETECT] Bắt đầu OCR với các góc xoay khác nhau...
+[2026-01-05 10:47:47] [PLATE_DETECT] OCR attempt: cc=0, ct=0, deskewed_shape=(34, 126, 3)
+[2026-01-05 10:47:49] [PLATE_DETECT] OCR result (cc=0, ct=0): '77C-253.91'
+[2026-01-05 10:47:49] [PLATE_DETECT] ✓ Tìm thấy biển số: '77C-253.91' (cc=0, ct=0)

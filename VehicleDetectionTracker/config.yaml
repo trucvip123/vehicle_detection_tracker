@@ -8,12 +8,12 @@ detection:
   # Confidence threshold (0.0 - 1.0)
   # Giá trị thấp hơn = phát hiện nhiều hơn nhưng có thể có false positives
   # Giá trị cao hơn = chính xác hơn nhưng có thể bỏ sót một số phương tiện
-  confidence: 0.4
+  confidence: 0.5
   
   # IoU (Intersection over Union) threshold cho NMS (Non-Maximum Suppression)
   # Giá trị thấp hơn = loại bỏ nhiều box trùng lặp hơn
   # Giá trị cao hơn = giữ lại nhiều box hơn
-  iou: 0.45
+  iou: 0.4
   
   # Kích thước ảnh xử lý (pixels)
   # Giá trị lớn hơn = chính xác hơn nhưng chậm hơn

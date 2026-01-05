@@ -6,6 +6,13 @@ import cv2
 import base64
 import numpy as np
 
+# Try to import logging utility
+try:
+    from VehicleDetectionTracker.logging_utils import log as _log_image
+except ImportError:
+    def _log_image(message, category="image"):
+        print(f"[{__import__('datetime').datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {message}")
+
 
 def encode_image_base64(image):
     """
@@ -38,7 +45,7 @@ def decode_image_base64(image_base64):
         image = cv2.imdecode(image_np, flags=cv2.IMREAD_COLOR)
         return image
     except Exception as e:
-        print(f"Error decoding base64 image: {e}")
+        _log_image(f"Error decoding base64 image: {e}", "image")
         return None
 
 

@@ -2,6 +2,13 @@ import numpy as np
 import math
 import cv2
 
+# Try to import logging utility
+try:
+    from VehicleDetectionTracker.logging_utils import log as _log_rotate
+except ImportError:
+    def _log_rotate(message, category="image"):
+        print(f"[{__import__('datetime').datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {message}")
+
 
 def changeContrast(img):
     lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
@@ -26,7 +33,7 @@ def compute_skew(src_img, center_thres):
     elif len(src_img.shape) == 2:
         h, w = src_img.shape
     else:
-        print("upsupported image type")
+        _log_rotate("upsupported image type", "image")
     img = cv2.medianBlur(src_img, 3)
     edges = cv2.Canny(
         img, threshold1=30, threshold2=100, apertureSize=3, L2gradient=True

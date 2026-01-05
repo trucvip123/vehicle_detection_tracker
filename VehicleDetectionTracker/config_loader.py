@@ -7,6 +7,7 @@ import yaml
 import os
 from pathlib import Path
 from typing import Dict, Any, Optional
+from VehicleDetectionTracker.logging_utils import log
 
 
 class ConfigLoader:
@@ -33,8 +34,8 @@ class ConfigLoader:
             config_path = Path(__file__).parent.parent / "config.yaml"
 
         if not config_path.exists():
-            print(f"⚠ Warning: Config file not found at {config_path}")
-            print("⚠ Using default configuration")
+            log(f"⚠ Warning: Config file not found at {config_path}", "config")
+            log("⚠ Using default configuration", "config")
             self._config = self._get_default_config()
             return
 
@@ -46,10 +47,10 @@ class ConfigLoader:
             default_config = self._get_default_config()
             self._config = self._merge_config(default_config, self._config)
 
-            print(f"✓ Config loaded from: {config_path}")
+            log(f"✓ Config loaded from: {config_path}", "config")
         except Exception as e:
-            print(f"⚠ Error loading config: {e}")
-            print("⚠ Using default configuration")
+            log(f"⚠ Error loading config: {e}", "config")
+            log("⚠ Using default configuration", "config")
             self._config = self._get_default_config()
 
     def _merge_config(self, default: Dict, user: Dict) -> Dict:

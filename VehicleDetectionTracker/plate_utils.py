@@ -3,14 +3,35 @@ import cv2
 import numpy as np
 import torch
 from datetime import datetime
+from pathlib import Path
 
 from VehicleDetectionTracker.function import utils_rotate, helper
 
 
+def _ensure_log_dir():
+    """Ensure logs directory exists."""
+    log_dir = Path("logs")
+    log_dir.mkdir(exist_ok=True)
+    return log_dir
+
+
 def _log(message):
-    """Print log message with datetime timestamp."""
+    """Print log message with datetime timestamp and save to file."""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[{timestamp}] {message}")
+    log_message = f"[{timestamp}] {message}"
+    
+    # Print to console
+    print(log_message)
+    
+    # Write to file
+    try:
+        log_dir = _ensure_log_dir()
+        log_file = log_dir / f"plate_{datetime.now().strftime('%Y-%m-%d')}.log"
+        with open(log_file, "a", encoding="utf-8") as f:
+            f.write(log_message + "\n")
+    except Exception as e:
+        # Don't fail if logging fails, just print error
+        print(f"Error writing to log file: {e}")
 
 
 def initialize_plate_detector(model_path="model/LP_detector.pt", device=None):
@@ -48,7 +69,7 @@ def initialize_plate_detector(model_path="model/LP_detector.pt", device=None):
 
         return plate_model
     except Exception as e:
-        print(f"Error loading license plate model: {e}")
+        _log(f"Error loading license plate model: {e}")
         return None
 
 
@@ -63,7 +84,7 @@ def preprocess_plate_image(plate_image):
         dilated = cv2.dilate(denoised, kernel, iterations=1)
         return dilated
     except Exception as e:
-        print(f"Error in plate image preprocessing: {e}")
+        _log(f"Error in plate image preprocessing: {e}")
         return plate_image
 
 
