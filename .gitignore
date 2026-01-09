@@ -3,7 +3,7 @@ dist/
 build/
 *.egg-info/
 yolov5/
-
+logs/
 *.xlsx
 # Python cache files (no need to include them)
 __pycache__/

@@ -110,10 +110,18 @@ def _sync_plate_inference(plate_model, vehicle_frame, model_lock, size=None):
     
     try:
         with model_lock:
-            return plate_model(vehicle_frame, size=size)
+            # YOLOv5 AutoShape model: set imgsz attribute before calling
+            # Save original imgsz to restore later (if needed)
+            original_imgsz = getattr(plate_model, 'imgsz', None)
+            plate_model.imgsz = size
+            result = plate_model(vehicle_frame)
+            # Restore original imgsz if it existed
+            if original_imgsz is not None:
+                plate_model.imgsz = original_imgsz
+            return result
     except Exception as e:
-        _log(f"[PLATE_INFERENCE] ❌ Error during inference: {e}")
-        # Fallback: thử gọi không có size parameter
+        _log(f"[PLATE_INFERENCE] ❌ Error during inference with imgsz={size}: {e}")
+        # Fallback: thử gọi không có size parameter (use default)
         try:
             with model_lock:
                 return plate_model(vehicle_frame)
