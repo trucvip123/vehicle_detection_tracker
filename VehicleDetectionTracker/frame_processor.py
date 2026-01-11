@@ -81,7 +81,7 @@ class FrameProcessor:
                     timestamp_str = frame_timestamp.strftime("%Y%m%d_%H%M%S_%f")[:-3]
                     # Extract vehicle frame for OCR
                     vehicle_frame = frame[
-                        int(y - h / 2 - 10) : int(y + h / 2 + 20),
+                        int(y - h / 2 + 200) : int(y + h / 2 + 20),
                         int(x - w / 2) : int(x + w / 2),
                     ]
                     filename = f"screenshots/vehicle_frame_{timestamp_str}.png"

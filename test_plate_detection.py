@@ -40,7 +40,8 @@ def test_plate_detection(image_path, use_gpu=None):
     # Load image
     print(f"\n📷 Loading image: {image_path}")
     vehicle_frame = cv2.imread(str(image_path))
-    
+    vehicle_frame = vehicle_frame[200:, :, :]  # Crop top 200 pixels
+
     if vehicle_frame is None:
         print(f"❌ Error: Could not load image from {image_path}")
         return

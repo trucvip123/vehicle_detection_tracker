@@ -69,10 +69,15 @@ def compute_skew(src_img, center_thres):
     return (angle / cnt) * 180 / math.pi
 
 
-def deskew(src_img, change_cons, center_thres):
-    if change_cons == 1:
-        return rotate_image(
-            src_img, compute_skew(changeContrast(src_img), center_thres)
-        )
-    else:
-        return rotate_image(src_img, compute_skew(src_img, center_thres))
+def deskew(src_img, direction, center_thres):
+    """
+    Rotate image left or right based on computed skew angle.
+    direction: -1 for left, 1 for right, 0 for auto (no direction)
+    """
+    angle = compute_skew(src_img, center_thres)
+    if direction == -1:
+        angle = -abs(angle)
+    elif direction == 1:
+        angle = abs(angle)
+    # direction == 0: use computed angle as is
+    return rotate_image(src_img, angle)
