@@ -19,7 +19,6 @@ def reset_telegram_sent():
 
 class PlateProcessor:
     """Handles license plate detection and tracking."""
-
     def __init__(self, plate_model, ocr_reader, executor, log_func):
         self.plate_model = plate_model
         self.ocr_reader = ocr_reader
@@ -34,6 +33,27 @@ class PlateProcessor:
         self.vehicle_missing_frames = {}  # {track_id: missing_frame_count}
 
         self._model_lock = threading.Lock()
+
+    def save_daily_vehicle_summary(self, date_str=None):
+        """
+        Gửi thông báo Telegram tổng hợp số lượng xe đi vào trong ngày, không xuất file CSV.
+        Args:
+            date_str (str): Date in YYYYMMDD format. If None, use today.
+        """
+        from datetime import datetime
+        from VehicleDetectionTracker.utils.send_bot import send_notify_to_telegram
+        if date_str is None:
+            date_str = datetime.now().strftime("%Y%m%d")
+        # Only count vehicles with direction_label indicating entry (e.g., 'IN')
+        vehicles_today = [tid for tid, ts in self.vehicle_last_seen.items()
+                 if ts.strftime("%Y%m%d") == date_str and "top" in self.vehicle_directions.get(tid, '').lower()]
+        try:
+            msg = f"Tổng hợp xe vào ngày {date_str}: {len(vehicles_today)} xe vào khu vực mỏ."
+            send_notify_to_telegram(msg)
+            self.log(f"Telegram notification sent for daily summary: {msg}")
+        except Exception as e:
+            self.log(f"Failed to send Telegram summary notification: {e}")
+
 
     def get_most_detected_plate(self, track_id):
         """
@@ -78,6 +98,7 @@ class PlateProcessor:
                 self.ocr_reader,
                 self._model_lock,
                 timestamp,
+                track_id=track_id
             )
             plate_text = license_plate_info.get("text") if license_plate_info else None
             self.log(f"Vehicle {track_id} detected plate: {plate_text}")

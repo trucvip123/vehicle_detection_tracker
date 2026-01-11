@@ -171,6 +171,14 @@ class ConfigLoader:
         """Lấy config cho advanced settings"""
         return self._config.get("advanced", {})
 
+    def get_operating_hours_config(self) -> Dict:
+        """Lấy config cho operating_hours"""
+        return self._config.get("operating_hours", {})
+    
+    # Convenience function
+    def get_operating_hours_config() -> Dict:
+        """Lấy operating_hours config"""
+        return get_config().get_operating_hours_config()
 
 # Singleton instance
 def get_config() -> ConfigLoader:

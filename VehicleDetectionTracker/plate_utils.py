@@ -131,7 +131,7 @@ def _sync_plate_inference(plate_model, vehicle_frame, model_lock, size=None):
 
 
 def detect_license_plate_sync(
-    plate_model, vehicle_frame, ocr_reader, model_lock, timestamp_str
+    plate_model, vehicle_frame, ocr_reader, model_lock, timestamp_str, track_id=None
 ):
     """Detect license plate synchronously with detailed logging for debugging."""
     try:
@@ -175,10 +175,24 @@ def detect_license_plate_sync(
             conf = float(pred[i][4])
             cv2.rectangle(debug_img, (x1, y1), (x2, y2), (255, 0, 0), 2)
             cv2.putText(debug_img, f"{conf:.2f}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
-        cv2.imwrite(f"screenshots/debug_plate_detections_{timestamp_str}.png", debug_img)
+        # cv2.imwrite(f"screenshots/debug_plate_detections_{timestamp_str}.png", debug_img)
         _log(f"[PLATE_DETECT] Debug image with all detections saved: screenshots/debug_plate_detections_{timestamp_str}.png")
 
-        filename = f"screenshots/vehicle_frame_{timestamp_str}.png"
+        # Use provided track_id for folder naming
+        folder_track_id = track_id
+        if folder_track_id is None:
+            if hasattr(vehicle_frame, 'track_id'):
+                folder_track_id = vehicle_frame.track_id
+            elif isinstance(vehicle_frame, dict) and 'track_id' in vehicle_frame:
+                folder_track_id = vehicle_frame['track_id']
+            else:
+                folder_track_id = 'unknown'
+        # Add date-based subfolder under screenshots
+        date_str = datetime.now().strftime("%Y%m%d")
+        vehicle_dir = f"screenshots/{date_str}/{folder_track_id}"
+        import os
+        os.makedirs(vehicle_dir, exist_ok=True)
+        filename = f"{vehicle_dir}/vehicle_frame_{timestamp_str}.png"
         cv2.imwrite(filename, vehicle_frame)
 
         pred = results.pred[0]
@@ -252,7 +266,8 @@ def detect_license_plate_sync(
         _log(f"[PLATE_DETECT] ✓ Extracted plate image shape: {plate_image.shape}")
         
         # Save plate image
-        filename = f"screenshots/license_frame_{timestamp_str}.png"
+        # Save license frame in the same track_id folder
+        filename = f"{vehicle_dir}/license_frame_{timestamp_str}.png"
         cv2.imwrite(filename, plate_image)
 
         # Check OCR reader
