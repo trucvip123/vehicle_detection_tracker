@@ -14,8 +14,12 @@ import logging
 try:
     from VehicleDetectionTracker.logging_utils import log as _log_ocr
 except ImportError:
+
     def _log_ocr(message, category="ocr"):
-        print(f"[{__import__('datetime').datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {message}")
+        print(
+            f"[{__import__('datetime').datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {message}"
+        )
+
 
 # Module logger
 logger = logging.getLogger(__name__)
@@ -74,26 +78,35 @@ class PaddleOCRWrapper:
                 # Kiểm tra xem PaddlePaddle có được compile với CUDA không
                 if paddle.device.is_compiled_with_cuda():
                     _log_ocr(
-                        "✓ PaddleOCR: PaddlePaddle hỗ trợ GPU, sẽ tự động sử dụng GPU nếu có", "ocr"
+                        "✓ PaddleOCR: PaddlePaddle hỗ trợ GPU, sẽ tự động sử dụng GPU nếu có",
+                        "ocr",
                     )
                     device_info = "GPU (auto-detected)"
                 else:
-                    _log_ocr("✓ PaddleOCR: PaddlePaddle được compile cho CPU, sử dụng CPU", "ocr")
+                    _log_ocr(
+                        "✓ PaddleOCR: PaddlePaddle được compile cho CPU, sử dụng CPU",
+                        "ocr",
+                    )
                     device_info = "CPU"
             except Exception:
                 # Nếu không import được paddle, để PaddleOCR tự phát hiện
-                _log_ocr("✓ PaddleOCR: PaddleOCR sẽ tự động chọn device (CPU hoặc GPU)", "ocr")
+                _log_ocr(
+                    "✓ PaddleOCR: PaddleOCR sẽ tự động chọn device (CPU hoặc GPU)",
+                    "ocr",
+                )
 
             # Lưu ý: use_gpu parameter chỉ để thông báo, không ảnh hưởng đến PaddleOCR
             # PaddleOCR mới tự động phát hiện dựa trên PaddlePaddle được cài đặt
             if self.use_gpu is False:
                 _log_ocr(
-                    "⚠ PaddleOCR: Lưu ý - use_gpu=False được chỉ định nhưng PaddleOCR mới tự động phát hiện device", "ocr"
+                    "⚠ PaddleOCR: Lưu ý - use_gpu=False được chỉ định nhưng PaddleOCR mới tự động phát hiện device",
+                    "ocr",
                 )
                 device_info = "CPU (requested, nhưng PaddleOCR tự quyết định)"
             elif self.use_gpu is True:
                 _log_ocr(
-                    "✓ PaddleOCR: Cố gắng sử dụng GPU (nếu PaddlePaddle-GPU được cài đặt)", "ocr"
+                    "✓ PaddleOCR: Cố gắng sử dụng GPU (nếu PaddlePaddle-GPU được cài đặt)",
+                    "ocr",
                 )
                 device_info = "GPU (requested)"
 
@@ -117,7 +130,8 @@ class PaddleOCRWrapper:
             # PaddleOCR sẽ tự động sử dụng GPU nếu PaddlePaddle-GPU được cài đặt
             self.ocr = PaddleOCR(**ocr_kwargs)
             _log_ocr(
-                f"OK: PaddleOCR initialized successfully (lang={self.lang}, device={device_info})", "ocr"
+                f"OK: PaddleOCR initialized successfully (lang={self.lang}, device={device_info})",
+                "ocr",
             )
 
         except Exception as e:
@@ -329,7 +343,9 @@ class PaddleOCRWrapper:
         )
         # number_candidates chỉ chứa chuỗi số (không còn chữ), lấy từ normalized, mỗi phần tử là chuỗi số có độ dài 4–5 ký tự.
         number_candidates = [
-            re.sub(r"\D", "", t) for t in normalized if re.match(r"^\d{4,5}$", re.sub(r"\D", "", t))
+            re.sub(r"\D", "", t)
+            for t in normalized
+            if re.match(r"^\d{4,5}$", re.sub(r"\D", "", t))
         ]
         number_part = max(number_candidates, key=len, default="")
         # print(f"DEBUG: province_part: {province_part}")
@@ -344,7 +360,9 @@ class PaddleOCRWrapper:
         plate = re.sub(r"^(\d{2}[A-Z])[- ]?(\d{3})(\d{2})$", r"\1-\2.\3", plate)
         # print(f"DEBUG: plate after format: {plate}")
         if len(plate) < 8:
-            _log_ocr(f"merge_ocr_results returning None due to short length: {plate}", "ocr")
+            _log_ocr(
+                f"merge_ocr_results returning None due to short length: {plate}", "ocr"
+            )
             return None
         if "-" not in plate:
             return None
@@ -385,11 +403,11 @@ class PaddleOCRWrapper:
                 or (license_plate[2].isdigit() and license_plate[2] != "1")
             ):
                 _log_ocr(
-                    f"DEBUG: License plate does not format license plate: {license_plate}", "ocr"
+                    f"DEBUG: License plate does not format license plate: {license_plate}",
+                    "ocr",
                 )
                 return None
         return self.merge_ocr_results(unique_texts)
-
 
     def _clean_license_plate_text(self, text):
         """

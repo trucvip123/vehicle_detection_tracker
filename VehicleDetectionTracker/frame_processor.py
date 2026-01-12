@@ -79,10 +79,10 @@ class FrameProcessor:
 
                 # Add date-based subfolder under screenshots
                 date_str = datetime.now().strftime("%Y%m%d")
-                time_str =  datetime.now().strftime("%H%M%S")
+                time_str = datetime.now().strftime("%H%M%S")
                 vehicle_dir = f"screenshots/{date_str}/{time_str}_{track_id}"
                 os.makedirs(vehicle_dir, exist_ok=True)
-                
+
                 # Save vehicle frame
                 try:
                     timestamp_str = frame_timestamp.strftime("%Y%m%d_%H%M%S_%f")[:-3]
@@ -144,7 +144,7 @@ class FrameProcessor:
                         vehicle_frame.copy(),
                         direction_label,
                         timestamp_str,
-                        vehicle_dir=vehicle_dir
+                        vehicle_dir=vehicle_dir,
                     )
 
         # Update missing frame counts for vehicles not detected

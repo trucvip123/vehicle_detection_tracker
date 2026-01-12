@@ -19,10 +19,10 @@ def _log(message):
     """Print log message with datetime timestamp and save to file."""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     log_message = f"[{timestamp}] {message}"
-    
+
     # Print to console
     print(log_message)
-    
+
     # Write to file
     try:
         log_dir = _ensure_log_dir()
@@ -92,27 +92,29 @@ def _sync_plate_inference(plate_model, vehicle_frame, model_lock, size=None):
     """Run plate model synchronously in a thread-safe way and return results or None."""
     if plate_model is None:
         return None
-    
+
     # Check if vehicle_frame is valid
     if vehicle_frame is None or vehicle_frame.size == 0:
         _log("[PLATE_INFERENCE] ❌ vehicle_frame is None or empty")
         return None
-    
+
     # Load config nếu size không được chỉ định
     if size is None:
         try:
             from VehicleDetectionTracker.config_loader import get_plate_detection_config
 
             plate_config = get_plate_detection_config()
-            size = plate_config.get("image_size", 1280)  # Default: 1280 cho license plate
+            size = plate_config.get(
+                "image_size", 1280
+            )  # Default: 1280 cho license plate
         except:
             size = 640
-    
+
     try:
         with model_lock:
             # YOLOv5 AutoShape model: set imgsz attribute before calling
             # Save original imgsz to restore later (if needed)
-            original_imgsz = getattr(plate_model, 'imgsz', None)
+            original_imgsz = getattr(plate_model, "imgsz", None)
             plate_model.imgsz = size
             result = plate_model(vehicle_frame)
             # Restore original imgsz if it existed
@@ -131,7 +133,12 @@ def _sync_plate_inference(plate_model, vehicle_frame, model_lock, size=None):
 
 
 def detect_license_plate_sync(
-    plate_model, vehicle_frame, ocr_reader, model_lock, timestamp_str, vehicle_dir="screenshots"
+    plate_model,
+    vehicle_frame,
+    ocr_reader,
+    model_lock,
+    timestamp_str,
+    vehicle_dir="screenshots",
 ):
     """Detect license plate synchronously with detailed logging for debugging."""
     try:
@@ -154,7 +161,6 @@ def detect_license_plate_sync(
             _log("[PLATE_DETECT] ❌ Inference results is None")
             return {"text": None, "bbox": None}
 
-
         # Log all raw detections for debugging
         pred = results.pred[0]
         num_detections = pred.shape[0]
@@ -174,10 +180,19 @@ def detect_license_plate_sync(
             x1, y1, x2, y2 = map(int, pred[i][:4].tolist())
             conf = float(pred[i][4])
             cv2.rectangle(debug_img, (x1, y1), (x2, y2), (255, 0, 0), 2)
-            cv2.putText(debug_img, f"{conf:.2f}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
+            cv2.putText(
+                debug_img,
+                f"{conf:.2f}",
+                (x1, y1 - 10),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.7,
+                (255, 0, 0),
+                2,
+            )
         # cv2.imwrite(f"screenshots/debug_plate_detections_{timestamp_str}.png", debug_img)
-        _log(f"[PLATE_DETECT] Debug image with all detections saved: screenshots/debug_plate_detections_{timestamp_str}.png")
-
+        _log(
+            f"[PLATE_DETECT] Debug image with all detections saved: screenshots/debug_plate_detections_{timestamp_str}.png"
+        )
 
         pred = results.pred[0]
         num_detections = pred.shape[0]
@@ -248,7 +263,7 @@ def detect_license_plate_sync(
             return {"text": None, "bbox": None}
 
         _log(f"[PLATE_DETECT] ✓ Extracted plate image shape: {plate_image.shape}")
-        
+
         # Save plate image
         # Save license frame in the same track_id folder
         filename = f"{vehicle_dir}/license_frame_{timestamp_str}.png"
@@ -259,14 +274,15 @@ def detect_license_plate_sync(
             _log("[PLATE_DETECT] ⚠ OCR reader is None, return bbox only")
             return {"text": None, "bbox": (x1, y1, x2, y2)}
 
-
         # Try OCR with different deskew directions
         _log("[PLATE_DETECT] Bắt đầu OCR với các hướng xoay khác nhau...")
         lp = "unknown"
         for direction in [-1, 1, 0]:  # left, right, auto
             for center_thres in [0, 1]:
                 try:
-                    deskewed_image = utils_rotate.deskew(plate_image, direction, center_thres)
+                    deskewed_image = utils_rotate.deskew(
+                        plate_image, direction, center_thres
+                    )
                     _log(
                         f"[PLATE_DETECT] OCR attempt: direction={direction}, center_thres={center_thres}, deskewed_shape={deskewed_image.shape if deskewed_image is not None else 'None'}"
                     )
@@ -274,7 +290,9 @@ def detect_license_plate_sync(
                     with model_lock:
                         lp = ocr_reader.read_license_plate(deskewed_image)
 
-                    _log(f"[PLATE_DETECT] OCR result (direction={direction}, center_thres={center_thres}): '{lp}'")
+                    _log(
+                        f"[PLATE_DETECT] OCR result (direction={direction}, center_thres={center_thres}): '{lp}'"
+                    )
 
                     if lp != "unknown" and lp is not None:
                         _log(
@@ -282,7 +300,9 @@ def detect_license_plate_sync(
                         )
                         return {"text": lp, "bbox": (x1, y1, x2, y2)}
                 except Exception as ocr_error:
-                    _log(f"[PLATE_DETECT] ⚠ OCR error (direction={direction}, center_thres={center_thres}): {ocr_error}")
+                    _log(
+                        f"[PLATE_DETECT] ⚠ OCR error (direction={direction}, center_thres={center_thres}): {ocr_error}"
+                    )
 
         _log(
             f"[PLATE_DETECT] ⚠ Không đọc được biển số sau tất cả các lần thử, return: '{lp}'"

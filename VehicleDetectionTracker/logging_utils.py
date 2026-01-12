@@ -27,16 +27,16 @@ def _write_to_log_file(message, log_category="app"):
 def log(message, category="app"):
     """
     Print log message with datetime timestamp and save to file.
-    
+
     Args:
         message (str): Log message
         category (str): Log category (app, config, telegram, ocr, etc.)
     """
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     log_message = f"[{timestamp}] {message}"
-    
+
     # Print to console
     print(log_message)
-    
+
     # Write to file
     _write_to_log_file(log_message, category)

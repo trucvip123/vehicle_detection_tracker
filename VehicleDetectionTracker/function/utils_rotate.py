@@ -6,8 +6,11 @@ import cv2
 try:
     from VehicleDetectionTracker.logging_utils import log as _log_rotate
 except ImportError:
+
     def _log_rotate(message, category="image"):
-        print(f"[{__import__('datetime').datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {message}")
+        print(
+            f"[{__import__('datetime').datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {message}"
+        )
 
 
 def changeContrast(img):

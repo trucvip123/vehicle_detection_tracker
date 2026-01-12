@@ -20,6 +20,7 @@ def reset_telegram_sent():
 
 class PlateProcessor:
     """Handles license plate detection and tracking."""
+
     def __init__(self, plate_model, ocr_reader, executor, log_func):
         self.plate_model = plate_model
         self.ocr_reader = ocr_reader
@@ -42,18 +43,22 @@ class PlateProcessor:
             date_str (str): Date in YYYYMMDD format. If None, use today.
         """
         from VehicleDetectionTracker.utils.send_bot import send_notify_to_telegram
+
         if date_str is None:
             date_str = datetime.now().strftime("%Y%m%d")
         # Only count vehicles with direction_label indicating entry (e.g., 'IN')
-        vehicles_today = [tid for tid, ts in self.vehicle_last_seen.items()
-                 if ts.strftime("%Y%m%d") == date_str and "top" in self.vehicle_directions.get(tid, '').lower()]
+        vehicles_today = [
+            tid
+            for tid, ts in self.vehicle_last_seen.items()
+            if ts.strftime("%Y%m%d") == date_str
+            and "top" in self.vehicle_directions.get(tid, "").lower()
+        ]
         try:
             msg = f"Tổng hợp xe vào ngày {date_str}: {len(vehicles_today)} xe vào khu vực mỏ."
             send_notify_to_telegram(msg)
             self.log(f"Telegram notification sent for daily summary: {msg}")
         except Exception as e:
             self.log(f"Failed to send Telegram summary notification: {e}")
-
 
     def get_most_detected_plate(self, track_id):
         """
@@ -77,7 +82,12 @@ class PlateProcessor:
         return most_detected_plate
 
     def process_plate_background_sync(
-        self, track_id, vehicle_frame, direction_label=None, timestamp=None, vehicle_dir="screenshots"
+        self,
+        track_id,
+        vehicle_frame,
+        direction_label=None,
+        timestamp=None,
+        vehicle_dir="screenshots",
     ):
         """
         Sync wrapper for background plate processing using ThreadPoolExecutor.
@@ -98,7 +108,7 @@ class PlateProcessor:
                 self.ocr_reader,
                 self._model_lock,
                 timestamp,
-                vehicle_dir=vehicle_dir
+                vehicle_dir=vehicle_dir,
             )
             plate_text = license_plate_info.get("text") if license_plate_info else None
             self.log(f"Vehicle {track_id} detected plate: {plate_text}")
@@ -150,5 +160,5 @@ class PlateProcessor:
                 vehicle_frame.copy(),
                 direction_label,
                 timestamp_str,
-                vehicle_dir=vehicle_dir
+                vehicle_dir=vehicle_dir,
             )

@@ -10,8 +10,11 @@ import numpy as np
 try:
     from VehicleDetectionTracker.logging_utils import log as _log_image
 except ImportError:
+
     def _log_image(message, category="image"):
-        print(f"[{__import__('datetime').datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {message}")
+        print(
+            f"[{__import__('datetime').datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {message}"
+        )
 
 
 def encode_image_base64(image):

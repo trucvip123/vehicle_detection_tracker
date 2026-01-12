@@ -12,6 +12,7 @@ from VehicleDetectionTracker.logging_utils import log
 
 class ConfigLoader:
     """Class để load và quản lý config"""
+
     _instance = None
     _config = None
 
@@ -174,11 +175,12 @@ class ConfigLoader:
     def get_operating_hours_config(self) -> Dict:
         """Lấy config cho operating_hours"""
         return self._config.get("operating_hours", {})
-    
+
     # Convenience function
     def get_operating_hours_config() -> Dict:
         """Lấy operating_hours config"""
         return get_config().get_operating_hours_config()
+
 
 # Singleton instance
 def get_config() -> ConfigLoader:
