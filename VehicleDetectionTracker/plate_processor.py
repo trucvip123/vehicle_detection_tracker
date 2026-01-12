@@ -1,5 +1,6 @@
 """License plate detection and processing utilities."""
 
+from datetime import datetime
 import threading
 import cv2
 from VehicleDetectionTracker.plate_utils import detect_license_plate_sync
@@ -40,7 +41,6 @@ class PlateProcessor:
         Args:
             date_str (str): Date in YYYYMMDD format. If None, use today.
         """
-        from datetime import datetime
         from VehicleDetectionTracker.utils.send_bot import send_notify_to_telegram
         if date_str is None:
             date_str = datetime.now().strftime("%Y%m%d")
@@ -77,7 +77,7 @@ class PlateProcessor:
         return most_detected_plate
 
     def process_plate_background_sync(
-        self, track_id, vehicle_frame, direction_label=None, timestamp=None
+        self, track_id, vehicle_frame, direction_label=None, timestamp=None, vehicle_dir="screenshots"
     ):
         """
         Sync wrapper for background plate processing using ThreadPoolExecutor.
@@ -98,7 +98,7 @@ class PlateProcessor:
                 self.ocr_reader,
                 self._model_lock,
                 timestamp,
-                track_id=track_id
+                vehicle_dir=vehicle_dir
             )
             plate_text = license_plate_info.get("text") if license_plate_info else None
             self.log(f"Vehicle {track_id} detected plate: {plate_text}")
@@ -127,7 +127,7 @@ class PlateProcessor:
                 global _vehicle_telegram_sent, _vehicle_telegram_sent_lock
                 with _vehicle_telegram_sent_lock:
                     if track_id not in _vehicle_telegram_sent:
-                        filename = f"screenshots/vehicle_{plate_text}.png"
+                        filename = f"{vehicle_dir}/vehicle_{plate_text}.png"
                         cv2.imwrite(filename, vehicle_frame)
                         self.log(
                             f"Sending Telegram notification for vehicle {track_id}..."
@@ -140,7 +140,7 @@ class PlateProcessor:
             self.log(f"Background plate detection error for vehicle {track_id}: {e}")
 
     def submit_plate_processing(
-        self, track_id, vehicle_frame, direction_label, timestamp_str
+        self, track_id, vehicle_frame, direction_label, timestamp_str, vehicle_dir
     ):
         """Submit plate processing to background executor."""
         if vehicle_frame.size > 0:
@@ -150,4 +150,5 @@ class PlateProcessor:
                 vehicle_frame.copy(),
                 direction_label,
                 timestamp_str,
+                vehicle_dir=vehicle_dir
             )

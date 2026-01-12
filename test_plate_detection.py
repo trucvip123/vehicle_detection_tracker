@@ -14,6 +14,8 @@ import threading
 from datetime import datetime
 from pathlib import Path
 
+from numpy import True_
+
 from VehicleDetectionTracker.plate_utils import initialize_plate_detector, detect_license_plate_sync
 from VehicleDetectionTracker.function.paddleocr_wrapper import create_paddleocr_reader
 from VehicleDetectionTracker.logging_utils import log
@@ -40,7 +42,6 @@ def test_plate_detection(image_path, use_gpu=None):
     # Load image
     print(f"\n📷 Loading image: {image_path}")
     vehicle_frame = cv2.imread(str(image_path))
-    vehicle_frame = vehicle_frame[200:, :, :]  # Crop top 200 pixels
 
     if vehicle_frame is None:
         print(f"❌ Error: Could not load image from {image_path}")
@@ -68,7 +69,7 @@ def test_plate_detection(image_path, use_gpu=None):
     try:
         ocr_reader = create_paddleocr_reader(
             lang="en",
-            use_angle_cls=False,
+            use_angle_cls=True,
             use_gpu=use_gpu
         )
         print("✓ OCR reader initialized")

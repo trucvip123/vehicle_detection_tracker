@@ -1,6 +1,7 @@
 """Frame detection and tracking processing."""
 
 import math
+import os
 import cv2
 from datetime import datetime
 from collections import defaultdict
@@ -76,6 +77,12 @@ class FrameProcessor:
                 if w < 230 or h < 90 or y - h / 2 < 10:
                     continue
 
+                # Add date-based subfolder under screenshots
+                date_str = datetime.now().strftime("%Y%m%d")
+                time_str =  datetime.now().strftime("%H%M%S")
+                vehicle_dir = f"screenshots/{date_str}/{time_str}_{track_id}"
+                os.makedirs(vehicle_dir, exist_ok=True)
+                
                 # Save vehicle frame
                 try:
                     timestamp_str = frame_timestamp.strftime("%Y%m%d_%H%M%S_%f")[:-3]
@@ -84,7 +91,7 @@ class FrameProcessor:
                         int(y - h / 2 + 150) : int(y + h / 2 + 20),
                         int(x - w / 2) : int(x + w / 2),
                     ]
-                    filename = f"screenshots/vehicle_frame_{timestamp_str}.png"
+                    filename = f"{vehicle_dir}/vehicle_frame_{timestamp_str}.png"
                     cv2.imwrite(filename, vehicle_frame)
                 except Exception as e:
                     self.log(f"Error saving frame: {e}")
@@ -137,6 +144,7 @@ class FrameProcessor:
                         vehicle_frame.copy(),
                         direction_label,
                         timestamp_str,
+                        vehicle_dir=vehicle_dir
                     )
 
         # Update missing frame counts for vehicles not detected

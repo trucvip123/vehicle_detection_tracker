@@ -327,9 +327,9 @@ class PaddleOCRWrapper:
         province_part = next(
             (t for t in normalized if re.match(r"^\d{2,3}[A-Z]{1,2}$", t.upper())), ""
         )
-        # Tìm phần có chứa dấu chấm hoặc 5 chữ số
+        # number_candidates chỉ chứa chuỗi số (không còn chữ), lấy từ normalized, mỗi phần tử là chuỗi số có độ dài 4–5 ký tự.
         number_candidates = [
-            t for t in normalized if re.match(r"^\d{3,6}$", re.sub(r"\D", "", t))
+            re.sub(r"\D", "", t) for t in normalized if re.match(r"^\d{4,5}$", re.sub(r"\D", "", t))
         ]
         number_part = max(number_candidates, key=len, default="")
         # print(f"DEBUG: province_part: {province_part}")
@@ -382,7 +382,7 @@ class PaddleOCRWrapper:
             if (
                 not license_plate[0].isdigit()
                 or not license_plate[1].isdigit()
-                or license_plate[2].isdigit()
+                or (license_plate[2].isdigit() and license_plate[2] != "1")
             ):
                 _log_ocr(
                     f"DEBUG: License plate does not format license plate: {license_plate}", "ocr"
