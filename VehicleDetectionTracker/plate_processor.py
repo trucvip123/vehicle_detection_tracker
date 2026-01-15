@@ -42,7 +42,7 @@ class PlateProcessor:
         Args:
             date_str (str): Date in YYYYMMDD format. If None, use today.
         """
-        from VehicleDetectionTracker.utils.send_bot import send_notify_to_telegram
+        from VehicleDetectionTracker.utils.send_bot import send_warning_to_telegram
 
         if date_str is None:
             date_str = datetime.now().strftime("%Y%m%d")
@@ -55,7 +55,7 @@ class PlateProcessor:
         ]
         try:
             msg = f"Tổng hợp xe vào ngày {date_str}: {len(vehicles_today)} xe vào khu vực mỏ."
-            send_notify_to_telegram(msg)
+            send_warning_to_telegram(msg)
             self.log(f"Telegram notification sent for daily summary: {msg}")
         except Exception as e:
             self.log(f"Failed to send Telegram summary notification: {e}")

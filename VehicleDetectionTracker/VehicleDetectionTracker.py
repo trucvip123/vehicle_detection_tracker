@@ -104,7 +104,7 @@ class VehicleDetectionTracker:
             self.plate_model, self.ocr_reader, self._executor, log
         )
         self.frame_processor = FrameProcessor(self.model, log)
-        self.stream_handler = StreamHandler(log)
+        self.stream_handler = StreamHandler(log, self.plate_processor)
 
         # Now initialize OCR reader if needed
         if initialize_all_models:

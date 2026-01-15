@@ -40,3 +40,4 @@ requests
 # YOLOv5 will be loaded via torch.hub from local yolov5 repository
 # Ensure yolov5 folder exists in the project root or install separately if needed
 
+python-dotenv

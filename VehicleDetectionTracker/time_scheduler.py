@@ -3,7 +3,7 @@ Time scheduler module for managing operating hours of vehicle detection system.
 Supports scheduling based on start/end hours with timezone support.
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from VehicleDetectionTracker.config_loader import get_config
 
 
@@ -38,55 +38,54 @@ def get_time_info():
 
 def is_outside_operating_hours():
     """
-    Check if current time is outside the configured operating hours.
-
-    Operating hours are defined in config.yaml under 'operating_hours' section:
-    - enabled: Whether operating hours scheduling is active
-    - start_hour: Hour when processing should start (0-23)
-    - end_hour: Hour when processing should end (0-23)
-
-    Special cases:
-    - If start_hour < end_hour: Process from start_hour to end_hour same day
-    - If start_hour > end_hour: Process from start_hour to 23:59 and 0:00 to end_hour (overnight)
-    - If start_hour == end_hour: Always process (24/7)
+    Check if current time is outside the configured operating hours and return the next end_time for notification.
 
     Returns:
-        bool: True if currently outside operating hours, False if within operating hours
+        tuple: (is_outside: bool, next_end_time: datetime)
     """
     config = get_config()
     operating_hours_config = config.get("operating_hours", {})
 
-    # Check if operating hours scheduling is enabled
     enabled = operating_hours_config.get("enabled", False)
-    if not enabled:
-        # Operating hours scheduling is disabled, always within operating hours
-        return False
-
     start_hour = operating_hours_config.get("start_hour", 6)
     end_hour = operating_hours_config.get("end_hour", 20)
 
     time_info = get_time_info()
+    now = time_info["datetime"]
     current_hour = time_info["hour"]
 
     # Edge case: if start_hour == end_hour, always process (24/7)
-    if start_hour == end_hour:
-        return False
+    if not enabled or start_hour == end_hour:
+        return (False, None)
 
-    # Case 1: start_hour < end_hour (normal operating hours within same day)
-    # Example: 6 AM to 8 PM
+    # Calculate next end_time (when operating hours end next)
     if start_hour < end_hour:
-        if start_hour <= current_hour < end_hour:
-            return False  # Within operating hours
+        # Normal case: same day
+        if now.hour < end_hour:
+            end_time = now.replace(hour=end_hour, minute=0, second=0, microsecond=0)
+            if now >= end_time:
+                end_time = end_time + timedelta(days=1)
         else:
-            return True  # Outside operating hours
-
-    # Case 2: start_hour > end_hour (overnight operating hours)
-    # Example: 8 PM (20) to 6 AM (6) - process from 20:00 to 23:59 and 0:00 to 6:00
+            # Already past end_hour, next end_time is tomorrow
+            end_time = (now + timedelta(days=1)).replace(hour=end_hour, minute=0, second=0, microsecond=0)
+        is_outside = not (start_hour <= current_hour < end_hour)
     else:
-        if current_hour >= start_hour or current_hour < end_hour:
-            return False  # Within operating hours
+        # Overnight case
+        if current_hour >= start_hour:
+            # End time is tomorrow
+            end_time = (now + timedelta(days=1)).replace(hour=end_hour, minute=0, second=0, microsecond=0)
+            is_outside = False
+        elif current_hour < end_hour:
+            # End time is today
+            end_time = now.replace(hour=end_hour, minute=0, second=0, microsecond=0)
+            is_outside = False
         else:
-            return True  # Outside operating hours
+            # Outside operating hours
+            # Next end_time is today at end_hour
+            end_time = now.replace(hour=end_hour, minute=0, second=0, microsecond=0)
+            is_outside = True
+
+    return (is_outside, end_time)
 
 
 def get_operating_hours_info():
