@@ -67,13 +67,17 @@ def is_outside_operating_hours():
                 end_time = end_time + timedelta(days=1)
         else:
             # Already past end_hour, next end_time is tomorrow
-            end_time = (now + timedelta(days=1)).replace(hour=end_hour, minute=0, second=0, microsecond=0)
+            end_time = (now + timedelta(days=1)).replace(
+                hour=end_hour, minute=0, second=0, microsecond=0
+            )
         is_outside = not (start_hour <= current_hour < end_hour)
     else:
         # Overnight case
         if current_hour >= start_hour:
             # End time is tomorrow
-            end_time = (now + timedelta(days=1)).replace(hour=end_hour, minute=0, second=0, microsecond=0)
+            end_time = (now + timedelta(days=1)).replace(
+                hour=end_hour, minute=0, second=0, microsecond=0
+            )
             is_outside = False
         elif current_hour < end_hour:
             # End time is today

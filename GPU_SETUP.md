@@ -95,3 +95,4 @@ Khi chạy, bạn sẽ thấy thông báo:
 - Giảm số workers trong ThreadPoolExecutor
 - Xử lý ít frame đồng thời
 
+

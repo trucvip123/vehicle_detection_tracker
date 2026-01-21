@@ -75,3 +75,4 @@ Bạn sẽ thấy thông báo:
 1. Kiểm tra Python version (khuyến nghị Python 3.8-3.11)
 2. Thử cài lại với pip: `pip install --upgrade --force-reinstall torch torchvision --index-url https://download.pytorch.org/whl/cu121`
 
+

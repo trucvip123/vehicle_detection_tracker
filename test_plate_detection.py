@@ -151,9 +151,9 @@ def test_plate_detection(image_path, use_gpu=None):
             )
 
         # Save output image
-        output_path = f"test_output_{timestamp_str}.png"
-        cv2.imwrite(output_path, output_image)
-        print(f"\n💾 Output image saved: {output_path}")
+        # output_path = f"test_output_{timestamp_str}.png"
+        # cv2.imwrite(output_path, output_image)
+        # print(f"\n💾 Output image saved: {output_path}")
 
     print("=" * 60)
     print("Test completed!")

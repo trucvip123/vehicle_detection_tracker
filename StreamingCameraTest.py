@@ -5,6 +5,7 @@ Optimized for real-time performance - no bounding boxes, only plate text
 
 from VehicleDetectionTracker.VehicleDetectionTracker import VehicleDetectionTracker
 
+
 def main():
     # Initialize tracker
     # Để tránh mờ hình, không resize (giữ nguyên kích thước gốc từ camera/RTSP).
@@ -22,6 +23,7 @@ def main():
     finally:
         # Cleanup
         tracker.cleanup()
+
 
 if __name__ == "__main__":
     main()

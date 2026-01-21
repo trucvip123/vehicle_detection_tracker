@@ -41,3 +41,4 @@ requests
 # Ensure yolov5 folder exists in the project root or install separately if needed
 
 python-dotenv
+

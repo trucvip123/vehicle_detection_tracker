@@ -72,6 +72,7 @@ class FrameProcessor:
             current_track_ids = set(track_ids)
 
             # Update tracking history and calculate directions
+            timestamp_str = frame_timestamp.strftime("%Y%m%d_%H%M%S_%f")[:-3]
             for box, track_id in zip(boxes, track_ids):
                 x, y, w, h = box
                 if w < 230 or h < 90 or y - h / 2 < 10:
@@ -85,7 +86,6 @@ class FrameProcessor:
 
                 # Save vehicle frame
                 try:
-                    timestamp_str = frame_timestamp.strftime("%Y%m%d_%H%M%S_%f")[:-3]
                     # Extract vehicle frame for OCR
                     vehicle_frame = frame[
                         int(y - h / 2 + 150) : int(y + h / 2 + 20),

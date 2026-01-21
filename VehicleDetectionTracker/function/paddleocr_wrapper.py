@@ -167,8 +167,8 @@ class PaddleOCRWrapper:
                 img_array = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
 
             # Xử lý ảnh để cải thiện OCR
-            # processed_images = self._preprocess_image_for_ocr(img_array)
-            processed_images = [img_array]
+            processed_images = self._preprocess_image_for_ocr(img_array)
+            # processed_images = [img_array]
 
             all_text_results = []
 
@@ -176,57 +176,27 @@ class PaddleOCRWrapper:
             for processed_img in processed_images:
                 try:
                     # OCR với PaddleOCR
-                    results = self.ocr.ocr(processed_img)
+                    results = self.ocr.predict(processed_img)
 
                     if results and len(results) > 0:
                         # Xử lý kết quả - phiên bản mới có cấu trúc khác
                         result = results[0] if isinstance(results, list) else results
 
-                        # Kiểm tra cấu trúc mới
-                        if isinstance(result, dict):
-                            # Cấu trúc mới: dict với rec_texts và rec_scores
-                            if "rec_texts" in result and "rec_scores" in result:
-                                texts = result["rec_texts"]
-                                scores = result["rec_scores"]
+                        # Cấu trúc mới: dict với rec_texts và rec_scores
+                        if "rec_texts" in result and "rec_scores" in result:
+                            texts = result["rec_texts"]
+                            scores = result["rec_scores"]
 
-                                for text, confidence in zip(texts, scores):
-                                    if confidence > 0.3:  # Threshold thấp hơn
-                                        cleaned_text = self._clean_license_plate_text(
-                                            text
+                            for text, confidence in zip(texts, scores):
+                                print("text, confidence:", text, confidence)
+                                if confidence > 0.3:  # Threshold thấp hơn
+                                    cleaned_text = self._clean_license_plate_text(
+                                        text
+                                    )
+                                    if cleaned_text and len(cleaned_text) >= 3:
+                                        all_text_results.append(
+                                            (cleaned_text, confidence)
                                         )
-                                        if cleaned_text and len(cleaned_text) >= 3:
-                                            all_text_results.append(
-                                                (cleaned_text, confidence)
-                                            )
-
-                        elif isinstance(result, list):
-                            # Cấu trúc cũ: list of lines
-                            for line in result:
-                                if line and len(line) >= 2:
-                                    try:
-                                        # Kiểm tra cấu trúc kết quả
-                                        if (
-                                            isinstance(line[1], (list, tuple))
-                                            and len(line[1]) >= 2
-                                        ):
-                                            text = line[1][0]  # Text được nhận dạng
-                                            confidence = line[1][1]  # Confidence score
-                                        else:
-                                            continue
-
-                                        # Giảm confidence threshold cho biển số
-                                        if confidence > 0.3:  # Threshold thấp hơn
-                                            cleaned_text = (
-                                                self._clean_license_plate_text(text)
-                                            )
-                                            if (
-                                                cleaned_text and len(cleaned_text) >= 6
-                                            ):  # Độ dài tối thiểu thấp hơn
-                                                all_text_results.append(
-                                                    (cleaned_text, confidence)
-                                                )
-                                    except (IndexError, TypeError):
-                                        continue
                 except Exception as e:
                     continue
 
@@ -332,7 +302,7 @@ class PaddleOCRWrapper:
         normalized = [self.normalize_plate_text(t) for t in ocr_results if t]
         if not normalized:
             return None
-        # print(f"DEBUG: normalized: {normalized}")
+        print(f"DEBUG: normalized: {normalized}")
         # Đếm tần suất chuỗi
         counts = collections.Counter(normalized)
         most_common = counts.most_common(1)[0][0]
@@ -341,6 +311,8 @@ class PaddleOCRWrapper:
         province_part = next(
             (t for t in normalized if re.match(r"^\d{2,3}[A-Z]{1,2}$", t.upper())), ""
         )
+        print("province_part:", province_part)
+
         # number_candidates chỉ chứa chuỗi số (không còn chữ), lấy từ normalized, mỗi phần tử là chuỗi số có độ dài 4–5 ký tự.
         number_candidates = [
             re.sub(r"\D", "", t)
@@ -385,7 +357,7 @@ class PaddleOCRWrapper:
         unique_results = {}
         _log_ocr(f"text_results: {text_results}", "ocr")
         for text, confidence in text_results:
-            if text not in unique_results and confidence > 0.5:
+            if text not in unique_results:
                 unique_results[text] = confidence
 
         unique_texts = list(unique_results.keys())
@@ -443,9 +415,9 @@ class PaddleOCRWrapper:
         text = re.sub(r"[^A-Za-z0-9\-\.]", "", text)
 
         # Xử lý các ký tự dễ nhầm lẫn
-        text = text.replace("O", "0")  # O thành 0
-        text = text.replace("I", "1")  # I thành 1
-        text = text.replace("S", "5")  # S thành 5 (trong một số trường hợp)
+        # text = text.replace("O", "0")  # O thành 0
+        # text = text.replace("I", "1")  # I thành 1
+        # text = text.replace("S", "5")  # S thành 5 (trong một số trường hợp)
 
         # Kiểm tra độ dài hợp lệ cho biển số VN
         if len(text) < 3 or len(text) > 15:

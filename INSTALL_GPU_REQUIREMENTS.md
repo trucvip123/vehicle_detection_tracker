@@ -125,3 +125,4 @@ print("=" * 50)
 - Điều này thường không gây vấn đề vì chúng sử dụng CUDA runtime khác nhau
 - Nếu có lỗi, thử cài cùng CUDA version cho cả hai
 
+

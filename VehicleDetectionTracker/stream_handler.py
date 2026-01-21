@@ -108,7 +108,9 @@ class StreamHandler:
         consecutive_failures = 0
         max_consecutive_failures = rtsp_config.get("max_consecutive_failures", 10)
         last_outside_hours_log = None
-        was_in_operating_hours = False  # Track operating hours state for end-of-day notification
+        was_in_operating_hours = (
+            False  # Track operating hours state for end-of-day notification
+        )
         frame_id = 0
 
         while True:
@@ -120,15 +122,17 @@ class StreamHandler:
                 if was_in_operating_hours and self.plate_processor is not None:
                     now = datetime.now()
                     # Only send once per day at the end time
-                    if self._last_daily_summary_time is None or \
-                       (now - self._last_daily_summary_time).total_seconds() > 86400:  # 24 hours
+                    if (
+                        self._last_daily_summary_time is None
+                        or (now - self._last_daily_summary_time).total_seconds() > 86400
+                    ):  # 24 hours
                         try:
                             self.log("[Thông báo] Gửi tổng hợp xe hàng ngày...")
                             self.plate_processor.save_daily_vehicle_summary()
                             self._last_daily_summary_time = now
                         except Exception as e:
                             self.log(f"Lỗi gửi thông báo hàng ngày: {e}")
-                
+
                 was_in_operating_hours = False
                 time_info = get_time_info()
                 current_time = time_info.get("current_time", "unknown")
@@ -150,8 +154,12 @@ class StreamHandler:
                 if end_time is not None:
                     wait_seconds = (end_time - now).total_seconds()
                     if wait_seconds > 0:
-                        self.log(f"[Thông báo] Sẽ kiểm tra lại vào {end_time.strftime('%H:%M:%S')}")
-                        time.sleep(min(wait_seconds, 1800))  # sleep up to 30 min or until end_time
+                        self.log(
+                            f"[Thông báo] Sẽ kiểm tra lại vào {end_time.strftime('%H:%M:%S')}"
+                        )
+                        time.sleep(
+                            min(wait_seconds, 1800)
+                        )  # sleep up to 30 min or until end_time
                     else:
                         time.sleep(30)
                 else:
@@ -260,40 +268,48 @@ class StreamHandler:
                             display_frame_resized = display_frame
                     else:
                         display_frame_resized = display_frame
-                    
+
                     # Display vehicle count on the frame
-                    if display_frame_resized is not None and plate_processor is not None:
+                    if (
+                        display_frame_resized is not None
+                        and plate_processor is not None
+                    ):
                         try:
                             today_str = datetime.now().strftime("%Y%m%d")
                             vehicles_today = [
                                 tid
                                 for tid, ts in plate_processor.vehicle_last_seen.items()
                                 if ts == today_str
-                                and "top" in plate_processor.vehicle_directions.get(tid, "").lower()
+                                and "top"
+                                in plate_processor.vehicle_directions.get(
+                                    tid, ""
+                                ).lower()
                             ]
                             vehicle_count = len(vehicles_today)
-                            
+
                             # Draw text on frame
                             text = f"Xe vao: {vehicle_count}"
                             font = cv2.FONT_HERSHEY_SIMPLEX
                             font_scale = 1.2
                             font_color = (0, 255, 0)  # Green
                             font_thickness = 2
-                            text_size = cv2.getTextSize(text, font, font_scale, font_thickness)[0]
-                            
+                            text_size = cv2.getTextSize(
+                                text, font, font_scale, font_thickness
+                            )[0]
+
                             # Position: top-right corner with padding
                             x = display_frame_resized.shape[1] - text_size[0] - 20
                             y = 40
-                            
+
                             # Draw background rectangle for better visibility
                             cv2.rectangle(
                                 display_frame_resized,
                                 (x - 10, y - text_size[1] - 10),
                                 (x + text_size[0] + 10, y + 10),
                                 (0, 0, 0),
-                                -1
+                                -1,
                             )
-                            
+
                             # Draw text
                             cv2.putText(
                                 display_frame_resized,
@@ -302,11 +318,11 @@ class StreamHandler:
                                 font,
                                 font_scale,
                                 font_color,
-                                font_thickness
+                                font_thickness,
                             )
                         except Exception as e:
                             self.log(f"Lỗi hiển thị số lượng xe: {e}")
-                    
+
                     cv2.imshow(
                         "Vehicle Detection - Streaming Mode", display_frame_resized
                     )
