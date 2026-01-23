@@ -154,9 +154,6 @@ class StreamHandler:
                 if end_time is not None:
                     wait_seconds = (end_time - now).total_seconds()
                     if wait_seconds > 0:
-                        self.log(
-                            f"[Thông báo] Sẽ kiểm tra lại vào {end_time.strftime('%H:%M:%S')}"
-                        )
                         time.sleep(
                             min(wait_seconds, 1800)
                         )  # sleep up to 30 min or until end_time
@@ -279,11 +276,8 @@ class StreamHandler:
                             vehicles_today = [
                                 tid
                                 for tid, ts in plate_processor.vehicle_last_seen.items()
-                                if ts == today_str
-                                and "top"
-                                in plate_processor.vehicle_directions.get(
-                                    tid, ""
-                                ).lower()
+                                if hasattr(ts, 'strftime') and ts.strftime("%Y%m%d") == today_str
+                                and "top" in plate_processor.vehicle_directions.get(tid, "").lower()
                             ]
                             vehicle_count = len(vehicles_today)
 

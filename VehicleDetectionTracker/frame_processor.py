@@ -25,6 +25,10 @@ class FrameProcessor:
         self.vehicle_timestamps = defaultdict(
             lambda: {"timestamps": [], "positions": []}
         )
+        # Load config for detection and tracking
+        self.detection_config = get_detection_config()
+        self.vehicle_classes = self.detection_config.get("vehicle_classes", [2, 5, 6, 7, 8])
+        self.log(f"[DETECT] vehicle_classes sử dụng: {self.vehicle_classes}")
 
     def process_frame_streaming(self, frame, frame_timestamp, plate_processor):
         """
@@ -39,23 +43,16 @@ class FrameProcessor:
         Returns:
             numpy.ndarray: Frame with license plates displayed in corner.
         """
-        # Load config for detection and tracking
-        detection_config = get_detection_config()
         tracking_config = get_tracking_config()
-
-        # Filter: chỉ detect vehicles (car, bus, truck)
-        # COCO classes: car=2, motorcycle=3, bus=5, truck=7
-        vehicle_classes = detection_config.get("vehicle_classes", [2, 5, 6, 7, 8])
-
         results = self.model.track(
             frame,
             persist=True,
             tracker=tracking_config.get("tracker_type", "bytetrack.yaml"),
-            classes=vehicle_classes,
+            classes=self.vehicle_classes,
             verbose=False,
-            conf=detection_config.get("confidence", 0.3),
-            iou=detection_config.get("iou", 0.45),
-            imgsz=detection_config.get("image_size", 1280),
+            conf=self.detection_config.get("confidence", 0.3),
+            iou=self.detection_config.get("iou", 0.45),
+            imgsz=self.detection_config.get("image_size", 1280),
         )
 
         # Track currently detected vehicles
@@ -69,11 +66,19 @@ class FrameProcessor:
         ):
             boxes = results[0].boxes.xywh.cpu()
             track_ids = results[0].boxes.id.int().cpu().tolist()
+            class_id_list = results[0].boxes.cls.int().cpu().tolist() if hasattr(results[0].boxes, 'cls') else [None]*len(track_ids)
             current_track_ids = set(track_ids)
+
+            # Log all currently detected vehicle IDs
+            self.log(f"[TRACK] Current detected vehicle IDs: {sorted(list(current_track_ids))}")
+
+            # COCO class mapping
+            coco_class_map = {2: "car", 3: "motorcycle", 5: "bus", 6: "train", 7: "truck", 8: "boat"}
 
             # Update tracking history and calculate directions
             timestamp_str = frame_timestamp.strftime("%Y%m%d_%H%M%S_%f")[:-3]
-            for box, track_id in zip(boxes, track_ids):
+            for box, track_id, class_id in zip(boxes, track_ids, class_id_list):
+                class_name = coco_class_map.get(class_id, str(class_id))
                 x, y, w, h = box
                 if w < 230 or h < 90 or y - h / 2 < 10:
                     continue
@@ -87,12 +92,16 @@ class FrameProcessor:
                 # Save vehicle frame
                 try:
                     # Extract vehicle frame for OCR
+                    vehicle_frame_save_img = frame[
+                        int(y - h / 2) : int(y + h / 2),
+                        int(x - w / 2) : int(x + w / 2),
+                    ]
                     vehicle_frame = frame[
-                        int(y - h / 2 + 150) : int(y + h / 2 + 20),
+                        int(y - h / 2 + 160) : int(y + h / 2 + 30),
                         int(x - w / 2) : int(x + w / 2),
                     ]
                     filename = f"{vehicle_dir}/vehicle_frame_{timestamp_str}.png"
-                    cv2.imwrite(filename, vehicle_frame)
+                    cv2.imwrite(filename, vehicle_frame_save_img)
                 except Exception as e:
                     self.log(f"Error saving frame: {e}")
 
@@ -131,7 +140,11 @@ class FrameProcessor:
                     final_x, final_y = positions[-1]
                     direction = math.atan2(final_y - initial_y, final_x - initial_x)
                     direction_label = map_direction_to_label(direction)
+
                     plate_processor.vehicle_directions[track_id] = direction_label
+                
+                # Log detected vehicle info
+                self.log(f"[TRACK] Detected vehicle: id={track_id}, class={class_name}, box=({x:.1f},{y:.1f},{w:.1f},{h:.1f}), direction={direction_label}")
 
                 if direction_label == "Unknown":
                     continue

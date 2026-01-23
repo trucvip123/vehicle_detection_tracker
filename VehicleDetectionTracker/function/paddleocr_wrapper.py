@@ -189,7 +189,8 @@ class PaddleOCRWrapper:
 
                             for text, confidence in zip(texts, scores):
                                 print("text, confidence:", text, confidence)
-                                if confidence > 0.3:  # Threshold thấp hơn
+                                has_number = bool(re.search(r'\d', text))
+                                if confidence > 0.3 and has_number:  # Threshold thấp hơn
                                     cleaned_text = self._clean_license_plate_text(
                                         text
                                     )
@@ -322,6 +323,15 @@ class PaddleOCRWrapper:
         number_part = max(number_candidates, key=len, default="")
         # print(f"DEBUG: province_part: {province_part}")
         # print(f"DEBUG: number_part: {number_part}")
+
+        number_part = (
+            number_part.replace("B", "8")
+            .replace("O", "0")
+            .replace("I", "1")
+            .replace("T", "7")
+            .replace("D", "0")
+        )
+
         # Ghép hai phần lại
         if province_part and number_part:
             plate = f"{province_part}-{number_part}"
