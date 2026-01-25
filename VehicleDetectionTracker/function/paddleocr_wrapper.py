@@ -312,7 +312,12 @@ class PaddleOCRWrapper:
         province_part = next(
             (t for t in normalized if re.match(r"^\d{2,3}[A-Z]{1,2}$", t.upper())), ""
         )
+        if province_part:
+            province_part = province_part[:2].replace("B", "8") + province_part[2:]
+        else:
+            province_part = ""
         print("province_part:", province_part)
+
 
         # number_candidates chỉ chứa chuỗi số (không còn chữ), lấy từ normalized, mỗi phần tử là chuỗi số có độ dài 4–5 ký tự.
         number_candidates = [

@@ -85,7 +85,7 @@ telegram:
 
 ```yaml
 threading:
-  max_workers: 4  # Số worker threads cho background tasks
+  max_workers: 8  # Số worker threads cho background tasks
 ```
 
 **Gợi ý:**
