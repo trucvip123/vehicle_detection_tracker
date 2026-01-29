@@ -9,7 +9,7 @@ from VehicleDetectionTracker.config_loader import (
     get_detection_config,
     get_tracking_config,
 )
-from VehicleDetectionTracker.image_utils_helper import map_direction_to_label
+from VehicleDetectionTracker.tracking_utils import map_direction_to_label
 
 
 class FrameProcessor:
@@ -27,7 +27,9 @@ class FrameProcessor:
         )
         # Load config for detection and tracking
         self.detection_config = get_detection_config()
-        self.vehicle_classes = self.detection_config.get("vehicle_classes", [2, 5, 6, 7, 8])
+        self.vehicle_classes = self.detection_config.get(
+            "vehicle_classes", [2, 5, 6, 7, 8]
+        )
         self.log(f"[DETECT] vehicle_classes sử dụng: {self.vehicle_classes}")
 
     def process_frame_streaming(self, frame, frame_timestamp, plate_processor):
@@ -50,9 +52,9 @@ class FrameProcessor:
             tracker=tracking_config.get("tracker_type", "bytetrack.yaml"),
             classes=self.vehicle_classes,
             verbose=False,
-            conf=self.detection_config.get("confidence", 0.3),
-            iou=self.detection_config.get("iou", 0.45),
-            imgsz=self.detection_config.get("image_size", 1280),
+            conf=self.detection_config.get("confidence"),
+            iou=self.detection_config.get("iou"),
+            imgsz=self.detection_config.get("image_size"),
         )
 
         # Track currently detected vehicles
@@ -66,26 +68,43 @@ class FrameProcessor:
         ):
             boxes = results[0].boxes.xywh.cpu()
             track_ids = results[0].boxes.id.int().cpu().tolist()
-            class_id_list = results[0].boxes.cls.int().cpu().tolist() if hasattr(results[0].boxes, 'cls') else [None]*len(track_ids)
+            class_id_list = (
+                results[0].boxes.cls.int().cpu().tolist()
+                if hasattr(results[0].boxes, "cls")
+                else [None] * len(track_ids)
+            )
             current_track_ids = set(track_ids)
 
             # Log all currently detected vehicle IDs
-            self.log(f"[TRACK] Current detected vehicle IDs: {sorted(list(current_track_ids))}")
+            self.log(
+                f"[TRACK] Current detected vehicle IDs: {sorted(list(current_track_ids))}"
+            )
 
             # COCO class mapping
-            coco_class_map = {2: "car", 3: "motorcycle", 5: "bus", 6: "train", 7: "truck", 8: "boat"}
+            coco_class_map = {
+                2: "car",
+                3: "motorcycle",
+                5: "bus",
+                6: "train",
+                7: "truck",
+                8: "boat",
+            }
 
             # Update tracking history and calculate directions
             timestamp_str = frame_timestamp.strftime("%Y%m%d_%H%M%S_%f")[:-3]
+            # Add date-based subfolder under screenshots
+            date_str = datetime.now().strftime("%Y%m%d")
+            time_str = datetime.now().strftime("%H%M%S")
+
             for box, track_id, class_id in zip(boxes, track_ids, class_id_list):
                 class_name = coco_class_map.get(class_id, str(class_id))
                 x, y, w, h = box
+                print(
+                    f"[DEBUG] Processing track_id={track_id}, class_id={class_id}, box=({x},{y},{w},{h})"
+                )
                 if w < 230 or h < 90 or y - h / 2 < 10:
                     continue
 
-                # Add date-based subfolder under screenshots
-                date_str = datetime.now().strftime("%Y%m%d")
-                time_str = datetime.now().strftime("%H%M%S")
                 vehicle_dir = f"screenshots/{date_str}/{time_str}_{track_id}"
                 os.makedirs(vehicle_dir, exist_ok=True)
 
@@ -93,11 +112,11 @@ class FrameProcessor:
                 try:
                     # Extract vehicle frame for OCR
                     vehicle_frame_save_img = frame[
-                        int(y - h / 2) : int(y + h / 2),
+                        int(y - h / 2 - 40) : int(y + h / 2 + 40),
                         int(x - w / 2) : int(x + w / 2),
                     ]
                     vehicle_frame = frame[
-                        int(y - h / 2 + 160) : int(y + h / 2 + 30),
+                        int(y - h / 2 + 160) : int(y + h / 2 + 40),
                         int(x - w / 2) : int(x + w / 2),
                     ]
                     filename = f"{vehicle_dir}/vehicle_frame_{timestamp_str}.png"
@@ -107,6 +126,10 @@ class FrameProcessor:
 
                 # Update last seen and reset missing frames
                 plate_processor.vehicle_last_seen[track_id] = frame_timestamp
+                self.log(
+                    f"[DEBUG] Updated vehicle_last_seen[{track_id}] = {frame_timestamp}"
+                )
+                plate_processor._save_state()  # Persist state after updating
                 if track_id not in plate_processor.vehicle_missing_frames:
                     plate_processor.vehicle_missing_frames[track_id] = 0
                 plate_processor.vehicle_missing_frames[track_id] = 0
@@ -140,11 +163,16 @@ class FrameProcessor:
                     final_x, final_y = positions[-1]
                     direction = math.atan2(final_y - initial_y, final_x - initial_x)
                     direction_label = map_direction_to_label(direction)
-
+                    self.log(
+                        f"[DEBUG] track_id={track_id} direction={direction:.2f} label={direction_label}"
+                    )
                     plate_processor.vehicle_directions[track_id] = direction_label
-                
+                    plate_processor._save_state()  # Persist state after updating direction
+
                 # Log detected vehicle info
-                self.log(f"[TRACK] Detected vehicle: id={track_id}, class={class_name}, box=({x:.1f},{y:.1f},{w:.1f},{h:.1f}), direction={direction_label}")
+                self.log(
+                    f"[TRACK] Detected vehicle: id={track_id}, class={class_name}, box=({x:.1f},{y:.1f},{w:.1f},{h:.1f}), direction={direction_label}"
+                )
 
                 if direction_label == "Unknown":
                     continue
@@ -156,6 +184,7 @@ class FrameProcessor:
                         track_id,
                         vehicle_frame.copy(),
                         direction_label,
+                        frame_timestamp,
                         timestamp_str,
                         vehicle_dir=vehicle_dir,
                     )

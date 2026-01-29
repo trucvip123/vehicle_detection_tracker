@@ -209,7 +209,7 @@ class StreamHandler:
                     frame_id += 1
                     if frame_id % 4 != 0:
                         continue
-                    if frame_id > 1000:
+                    if frame_id > 100:
                         frame_id = 0
                         continue
                 finally:
@@ -276,10 +276,16 @@ class StreamHandler:
                             vehicles_today = [
                                 tid
                                 for tid, ts in plate_processor.vehicle_last_seen.items()
-                                if hasattr(ts, 'strftime') and ts.strftime("%Y%m%d") == today_str
-                                and "top" in plate_processor.vehicle_directions.get(tid, "").lower()
+                                if hasattr(ts, "strftime")
+                                and ts.strftime("%Y%m%d") == today_str
+                                and "bottom"
+                                in plate_processor.vehicle_directions.get(
+                                    tid, ""
+                                ).lower()
                             ]
                             vehicle_count = len(vehicles_today)
+                            # if vehicles_today:
+                            #     self.log(f"[COUNT] today={today_str} vehicles_with_top_direction={vehicles_today} total={vehicle_count}")
 
                             # Draw text on frame
                             text = f"Xe vao: {vehicle_count}"

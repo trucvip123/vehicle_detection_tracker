@@ -61,7 +61,11 @@ def send_notify_to_telegram(license_plate, direction, timestamp=None, image_path
     elif "bottom" in direction.lower():
         direction = "vào"
     # Format timestamp for easy reading
-    dt = datetime.strptime(timestamp, "%Y%m%d_%H%M%S_%f")
+    if isinstance(timestamp, str):
+        dt = datetime.strptime(timestamp, "%Y%m%d_%H%M%S_%f")
+    else:
+        # If it's already a datetime object, use it directly
+        dt = timestamp
     formatted_time = dt.strftime("%Y-%m-%d %H:%M:%S")
 
     # Build message and strip leading/trailing whitespace
@@ -236,8 +240,6 @@ def send_warning_to_telegram(warning_message: str):
         "TELEGRAM_BOT_TOKEN",
         "",
     )
-    print("TELEGRAM_BOT_TOKEN:", TELEGRAM_BOT_TOKEN)
-
     # Get chat ID - can be positive (user) or negative (group/channel)
     # CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "6717527117") # for user
     CHAT_ID = os.getenv("TELEGRAM_GROUP_ID", "-4668166355")  # for group

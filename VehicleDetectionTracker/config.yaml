@@ -8,7 +8,7 @@ detection:
   # Confidence threshold (0.0 - 1.0)
   # Giá trị thấp hơn = phát hiện nhiều hơn nhưng có thể có false positives
   # Giá trị cao hơn = chính xác hơn nhưng có thể bỏ sót một số phương tiện
-  confidence: 0.5
+  confidence: 0.4
   
   # IoU (Intersection over Union) threshold cho NMS (Non-Maximum Suppression)
   # Giá trị thấp hơn = loại bỏ nhiều box trùng lặp hơn
@@ -115,7 +115,7 @@ telegram:
 # ============================================
 threading:
   # Số lượng worker threads cho background tasks
-  max_workers: 4
+  max_workers: 12
 
 # ============================================
 # File Paths

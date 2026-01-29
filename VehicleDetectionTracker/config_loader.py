@@ -48,7 +48,6 @@ class ConfigLoader:
             default_config = self._get_default_config()
             self._config = self._merge_config(default_config, self._config)
 
-            log(f"✓ Config loaded from: {config_path}", "config")
         except Exception as e:
             log(f"⚠ Error loading config: {e}", "config")
             log("⚠ Using default configuration", "config")

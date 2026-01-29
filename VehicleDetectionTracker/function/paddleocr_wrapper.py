@@ -189,11 +189,11 @@ class PaddleOCRWrapper:
 
                             for text, confidence in zip(texts, scores):
                                 print("text, confidence:", text, confidence)
-                                has_number = bool(re.search(r'\d', text))
-                                if confidence > 0.3 and has_number:  # Threshold thấp hơn
-                                    cleaned_text = self._clean_license_plate_text(
-                                        text
-                                    )
+                                has_number = bool(re.search(r"\d", text))
+                                if (
+                                    confidence > 0.3 and has_number
+                                ):  # Threshold thấp hơn
+                                    cleaned_text = self._clean_license_plate_text(text)
                                     if cleaned_text and len(cleaned_text) >= 3:
                                         all_text_results.append(
                                             (cleaned_text, confidence)
@@ -298,26 +298,26 @@ class PaddleOCRWrapper:
         return text
 
     def merge_ocr_results(self, ocr_results):
-        # print(f"DEBUG: ocr_results: {ocr_results}")
-        """Hợp nhất danh sách kết quả OCR thành biển số hợp lý nhất."""
-        normalized = [self.normalize_plate_text(t) for t in ocr_results if t]
-        if not normalized:
-            return None
-        print(f"DEBUG: normalized: {normalized}")
-        # Đếm tần suất chuỗi
-        counts = collections.Counter(normalized)
-        most_common = counts.most_common(1)[0][0]
+        # # print(f"DEBUG: ocr_results: {ocr_results}")
+        # """Hợp nhất danh sách kết quả OCR thành biển số hợp lý nhất."""
+        # normalized = [self.normalize_plate_text(t) for t in ocr_results if t]
+        # if not normalized:
+        #     return None
+        # print(f"DEBUG: normalized: {normalized}")
+        normalized = ocr_results
 
         # Tìm chuỗi dạng mã tỉnh: 1–3 số + 1–2 chữ cái (ví dụ: 77A, 51G, 47F1,...)
         province_part = next(
             (t for t in normalized if re.match(r"^\d{2,3}[A-Z]{1,2}$", t.upper())), ""
         )
         if province_part:
-            province_part = province_part[:2].replace("B", "8") + province_part[2:]
+            province_part = (
+                province_part[:2].replace("B", "8").replace("T", "1")
+                + province_part[2:]
+            )
         else:
             province_part = ""
-        print("province_part:", province_part)
-
+        _log_ocr(f"province_part: {province_part}", "ocr")
 
         # number_candidates chỉ chứa chuỗi số (không còn chữ), lấy từ normalized, mỗi phần tử là chuỗi số có độ dài 4–5 ký tự.
         number_candidates = [
@@ -341,7 +341,14 @@ class PaddleOCRWrapper:
         if province_part and number_part:
             plate = f"{province_part}-{number_part}"
         else:
-            plate = most_common
+            # Đếm tần suất chuỗi
+            counts = collections.Counter(normalized)
+            _log_ocr(f"counts: {counts}", "ocr")
+            most_common = counts.most_common(1)[0][0]
+            if not re.search(r"[A-Za-z]", most_common):
+                return None
+
+            plate = most_common[:2].replace("B", "8") + most_common[2:]
         # print(f"DEBUG: plate before format: {plate}")
         # Làm sạch định dạng kiểu 77A33151 -> 77A-331.51
         plate = re.sub(r"^(\d{2}[A-Z])[- ]?(\d{3})(\d{2})$", r"\1-\2.\3", plate)
@@ -377,6 +384,10 @@ class PaddleOCRWrapper:
 
         unique_texts = list(unique_results.keys())
         _log_ocr(f"DEBUG: All OCR results: {unique_texts}", "ocr")
+
+        # filtered_ls  = [s for s in unique_texts if re.search(r'[A-Za-z]', s)]
+        # _log_ocr(f"DEBUG: Filtered OCR results with letters: {filtered_ls}", "ocr")
+
         if len(unique_texts) == 0:
             return None
         elif len(unique_texts) == 1:

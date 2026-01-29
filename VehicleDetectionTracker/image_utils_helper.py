@@ -102,21 +102,3 @@ def draw_plate_text_corner(frame, plates_dict):
             )
 
     return frame
-
-
-def map_direction_to_label(direction):
-    """Map direction angle to label."""
-    direction_ranges = {
-        (-math.pi / 8, math.pi / 8): "Right",
-        (math.pi / 8, 3 * math.pi / 8): "Bottom Right",
-        (3 * math.pi / 8, 5 * math.pi / 8): "Bottom",
-        (5 * math.pi / 8, 7 * math.pi / 8): "Bottom Left",
-        (7 * math.pi / 8, -7 * math.pi / 8): "Left",
-        (-7 * math.pi / 8, -5 * math.pi / 8): "Top Left",
-        (-5 * math.pi / 8, -3 * math.pi / 8): "Top",
-        (-3 * math.pi / 8, -math.pi / 8): "Top Right",
-    }
-    for angle_range, label in direction_ranges.items():
-        if angle_range[0] <= direction <= angle_range[1]:
-            return label
-    return "Unknown"
