@@ -43,7 +43,7 @@ class StreamHandler:
         self.log = log_func
         self.plate_processor = plate_processor
         self._stream_notify_sent = False
-        self._last_daily_summary_time = None  # Track last time daily summary was sent
+        self._last_daily_summary_date = None  # Track last date daily summary was sent (YYYYMMDD format)
 
     def create_capture(self, video_path):
         """Create VideoCapture with GPU hardware decoding for RTSP streams."""
@@ -108,28 +108,23 @@ class StreamHandler:
         consecutive_failures = 0
         max_consecutive_failures = rtsp_config.get("max_consecutive_failures", 10)
         last_outside_hours_log = None
-        was_in_operating_hours = (
-            False  # Track operating hours state for end-of-day notification
-        )
+        was_in_operating_hours = False  # Track operating hours state for end-of-day notification
         frame_id = 0
 
         while True:
-
             # Check operating hours and get next end_time
             is_outside, end_time = is_outside_operating_hours()
+            # self.log(f"[DEBUG] is_outside_operating_hours: {is_outside}, end_time: {end_time}")
             if is_outside:
                 # Transition from operating hours to outside hours - send daily summary
                 if was_in_operating_hours and self.plate_processor is not None:
-                    now = datetime.now()
-                    # Only send once per day at the end time
-                    if (
-                        self._last_daily_summary_time is None
-                        or (now - self._last_daily_summary_time).total_seconds() > 86400
-                    ):  # 24 hours
+                    today_date = datetime.now().strftime("%Y%m%d")
+                    # Only send once per day - check if today's summary has been sent
+                    if self._last_daily_summary_date != today_date:
                         try:
-                            self.log("[Thông báo] Gửi tổng hợp xe hàng ngày...")
+                            self.log(f"[Thông báo] Gửi tổng hợp xe hàng ngày ({today_date})...")
                             self.plate_processor.save_daily_vehicle_summary()
-                            self._last_daily_summary_time = now
+                            self._last_daily_summary_date = today_date
                         except Exception as e:
                             self.log(f"Lỗi gửi thông báo hàng ngày: {e}")
 

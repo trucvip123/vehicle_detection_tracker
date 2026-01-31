@@ -10,15 +10,17 @@ from VehicleDetectionTracker.plate_utils import detect_license_plate_sync
 from VehicleDetectionTracker.utils.send_bot import send_notify_to_telegram
 
 
-# Global set to track vehicles that have already sent Telegram notifications
-_vehicle_telegram_sent = set()
+# Global sets to track vehicle notifications
+_vehicle_telegram_sent_with_plate = set()  # Vehicles that sent notification with plate
+_vehicle_telegram_sent_without_plate = set()  # Vehicles that sent notification without plate
 _vehicle_telegram_sent_lock = threading.Lock()
 
 
 def reset_telegram_sent():
     """Reset the telegram sent tracking set."""
-    global _vehicle_telegram_sent
-    _vehicle_telegram_sent.clear()
+    global _vehicle_telegram_sent_with_plate, _vehicle_telegram_sent_without_plate
+    _vehicle_telegram_sent_with_plate.clear()
+    _vehicle_telegram_sent_without_plate.clear()
 
 
 class PlateProcessor:
@@ -72,15 +74,60 @@ class PlateProcessor:
             for tid, ts in self.vehicle_last_seen.items()
             if hasattr(ts, "strftime")
             and ts.strftime("%Y%m%d") == date_str
-            and "top" in self.vehicle_directions.get(tid, "").lower()
+            and "bottom" in self.vehicle_directions.get(tid, "").lower()
         ]
         self.log(f"[DEBUG] vehicles_today: {vehicles_today}")
         try:
-            msg = f"Tổng hợp xe vào ngày {date_str}: {len(vehicles_today)} xe vào khu vực mỏ."
+            # Format date for readable display: YYYYMMDD -> YYYY-MM-DD
+            formatted_date = f"{date_str[0:4]}-{date_str[4:6]}-{date_str[6:8]}"
+            msg = f"Tổng hợp xe vào ngày {formatted_date}: {len(vehicles_today)} xe vào khu vực mỏ."
             send_warning_to_telegram(msg)
             self.log(f"Telegram notification sent for daily summary: {msg}")
         except Exception as e:
             self.log(f"Failed to send Telegram summary notification: {e}")
+
+    def _get_first_vehicle_image(self, vehicle_dir, track_id):
+        """
+        Get the first image file from the vehicle directory.
+        
+        Args:
+            vehicle_dir: Path to vehicle screenshots directory
+            track_id: Vehicle track ID for logging
+            
+        Returns:
+            str: Path to first image file or None if not found
+        """
+        try:
+            if os.path.exists(vehicle_dir):
+                # Find all PNG files in the directory
+                image_files = [
+                    f for f in os.listdir(vehicle_dir) 
+                    if f.endswith('.png')
+                ]
+                
+                if image_files:
+                    # Sort to get the first (earliest) image
+                    image_files.sort()
+                    image_path = os.path.join(vehicle_dir, image_files[0])
+                    self.log(
+                        f"[PLATE] vehicle_id={track_id} found first image: {image_files[0]}"
+                    )
+                    return image_path
+                else:
+                    self.log(
+                        f"[PLATE] vehicle_id={track_id} no images found in {vehicle_dir}"
+                    )
+                    return None
+            else:
+                self.log(
+                    f"[PLATE] vehicle_id={track_id} directory not found: {vehicle_dir}"
+                )
+                return None
+        except Exception as e:
+            self.log(
+                f"[PLATE] vehicle_id={track_id} error finding image: {e}"
+            )
+            return None
 
     def get_most_detected_plate(self, track_id):
         """
@@ -126,7 +173,16 @@ class PlateProcessor:
         """
         self.log(f"[PLATE] vehicle_id={track_id} Processing plate background")
         try:
-            # Use sync version for simplicity in streaming mode
+            # Always update direction if available (not just when plate is detected)
+            if direction_label:
+                self.vehicle_directions[track_id] = direction_label
+                self.log(
+                    f"[PLATE] vehicle_id={track_id} direction_set={direction_label}"
+                )
+            elif track_id not in self.vehicle_directions:
+                self.vehicle_directions[track_id] = "Unknown"
+
+            # Detect license plate
             license_plate_info = detect_license_plate_sync(
                 self.plate_model,
                 vehicle_frame,
@@ -137,51 +193,82 @@ class PlateProcessor:
             )
             plate_text = license_plate_info.get("text") if license_plate_info else None
             self.log(f"[PLATE] vehicle_id={track_id} detected_plate={plate_text}")
-            if plate_text and plate_text != "unknown":
-                # Update most recent plate for display
-                self.vehicle_plates[track_id] = plate_text
-
-                # Increment detection count for this plate
-                if track_id not in self.vehicle_plate_counts:
-                    self.vehicle_plate_counts[track_id] = {}
-                self.vehicle_plate_counts[track_id][plate_text] = (
-                    self.vehicle_plate_counts[track_id].get(plate_text, 0) + 1
-                )
-
-                # Get direction if available
-                if direction_label:
-                    self.vehicle_directions[track_id] = direction_label
-                    self.log(
-                        f"[PLATE] vehicle_id={track_id} direction_set={direction_label}"
-                    )
-                elif track_id not in self.vehicle_directions:
-                    self.vehicle_directions[track_id] = "Unknown"
-
-                # Update last seen timestamp
-                if frame_timestamp:
-                    self.vehicle_last_seen[track_id] = frame_timestamp
-                    self.log(
-                        f"[PLATE] vehicle_id={track_id} last_seen_updated={frame_timestamp}"
-                    )
-                    # Save state after updating last_seen
-                    self._save_state()
-
-                # Send Telegram notification only once per vehicle ID (thread-safe)
-                global _vehicle_telegram_sent, _vehicle_telegram_sent_lock
-                with _vehicle_telegram_sent_lock:
-                    if track_id not in _vehicle_telegram_sent:
-                        filename = f"{vehicle_dir}/vehicle_{plate_text}.png"
-                        cv2.imwrite(filename, vehicle_frame)
+            
+            # Send Telegram notification logic
+            global _vehicle_telegram_sent_with_plate, _vehicle_telegram_sent_without_plate, _vehicle_telegram_sent_lock
+            
+            # Only send notifications for vehicles entering (not exiting)
+            # Skip if direction contains "top" (exit/ra khỏi) or is "Unknown"
+            is_entering = direction_label and "top" not in direction_label.lower()
+            
+            if not is_entering:
+                self.log(f"[PLATE] vehicle_id={track_id} Skipping notification - vehicle is exiting (direction={direction_label})")
+                return
+            
+            with _vehicle_telegram_sent_lock:
+                # Case 1: Plate detected - send immediately if not already sent
+                if plate_text and plate_text != "unknown":
+                    if track_id not in _vehicle_telegram_sent_with_plate:
+                        self.vehicle_plates[track_id] = plate_text
+                        
+                        # Increment detection count for this plate
+                        if track_id not in self.vehicle_plate_counts:
+                            self.vehicle_plate_counts[track_id] = {}
+                        self.vehicle_plate_counts[track_id][plate_text] = (
+                            self.vehicle_plate_counts[track_id].get(plate_text, 0) + 1
+                        )
+                        
+                        image_path = f"{vehicle_dir}/vehicle_{plate_text}.png"
+                        cv2.imwrite(image_path, vehicle_frame)
+                        
                         self.log(
-                            f"[PLATE] vehicle_id={track_id} Sending Telegram notification"
+                            f"[PLATE] vehicle_id={track_id} Sending Telegram notification with plate (plate={plate_text})"
                         )
                         send_notify_to_telegram(
                             plate_text,
                             direction_label,
                             frame_timestamp,
-                            image_path=filename,
+                            image_path=image_path,
                         )
-                        _vehicle_telegram_sent.add(track_id)
+                        _vehicle_telegram_sent_with_plate.add(track_id)
+                        # Remove from without_plate list if it was there
+                        _vehicle_telegram_sent_without_plate.discard(track_id)
+                
+                # Case 2: Plate NOT detected - only send if vehicle has been missing for a while
+                # (indicating it has finished passing through all frames)
+                elif track_id not in _vehicle_telegram_sent_with_plate:
+                    missing_frames = self.vehicle_missing_frames.get(track_id, 0)
+                    # Only send "unknown" notification if vehicle has been missing for a significant time
+                    # This ensures we waited for all frames to pass before confirming no plate found
+                    MISSING_THRESHOLD = 60  # frames threshold before sending unknown notification
+                    
+                    if missing_frames >= MISSING_THRESHOLD and track_id not in _vehicle_telegram_sent_without_plate:
+                        # Find first image in vehicle_dir
+                        image_path = self._get_first_vehicle_image(vehicle_dir, track_id)
+                        
+                        # Send Telegram notification
+                        if image_path and os.path.exists(image_path):
+                            self.log(
+                                f"[PLATE] vehicle_id={track_id} Sending Telegram notification without plate (missing_frames={missing_frames})"
+                            )
+                            send_notify_to_telegram(
+                                "unknown",
+                                direction_label,
+                                frame_timestamp,
+                                image_path=image_path,
+                            )
+                        else:
+                            self.log(
+                                f"[PLATE] vehicle_id={track_id} No image found, sending notification without image (missing_frames={missing_frames})"
+                            )
+                            send_notify_to_telegram(
+                                "unknown",
+                                direction_label,
+                                frame_timestamp,
+                                image_path=None,
+                            )
+                        
+                        _vehicle_telegram_sent_without_plate.add(track_id)
         except Exception as e:
             self.log(f"[PLATE] vehicle_id={track_id} detection_error: {e}")
 

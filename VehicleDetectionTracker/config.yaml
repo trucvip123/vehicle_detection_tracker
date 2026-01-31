@@ -115,7 +115,7 @@ telegram:
 # ============================================
 threading:
   # Số lượng worker threads cho background tasks
-  max_workers: 12
+  max_workers: 16
 
 # ============================================
 # File Paths

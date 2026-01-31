@@ -348,6 +348,11 @@ class PaddleOCRWrapper:
             if not re.search(r"[A-Za-z]", most_common):
                 return None
 
+            split_plate = most_common.split('-')
+            length_province = len(split_plate[0])
+            if length_province != 3:
+                return None
+            
             plate = most_common[:2].replace("B", "8") + most_common[2:]
         # print(f"DEBUG: plate before format: {plate}")
         # Làm sạch định dạng kiểu 77A33151 -> 77A-331.51

@@ -174,26 +174,6 @@ def detect_license_plate_sync(
             conf = float(pred[i][4])
             _log(f"[PLATE_DETECT] Detection {i}: bbox={bbox}, confidence={conf:.3f}")
 
-        # Optionally, save image with all raw detections drawn
-        debug_img = vehicle_frame.copy()
-        for i in range(num_detections):
-            x1, y1, x2, y2 = map(int, pred[i][:4].tolist())
-            conf = float(pred[i][4])
-            cv2.rectangle(debug_img, (x1, y1), (x2, y2), (255, 0, 0), 2)
-            cv2.putText(
-                debug_img,
-                f"{conf:.2f}",
-                (x1, y1 - 10),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.7,
-                (255, 0, 0),
-                2,
-            )
-        # cv2.imwrite(f"screenshots/debug_plate_detections_{timestamp_str}.png", debug_img)
-        _log(
-            f"[PLATE_DETECT] Debug image with all detections saved: screenshots/debug_plate_detections_{timestamp_str}.png"
-        )
-
         pred = results.pred[0]
         num_detections = pred.shape[0]
         _log(f"[PLATE_DETECT] ✓ Tìm thấy {num_detections} detection(s)")
