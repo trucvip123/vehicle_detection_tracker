@@ -12,3 +12,4 @@ __pycache__/
 ~/.pypirc
 .env
 screenshots/
+vehicle_state/

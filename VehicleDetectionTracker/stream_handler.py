@@ -261,7 +261,7 @@ class StreamHandler:
                     else:
                         display_frame_resized = display_frame
 
-                    # Display vehicle count on the frame
+                    # Display vehicle count and license plates on the frame
                     if (
                         display_frame_resized is not None
                         and plate_processor is not None
@@ -279,44 +279,135 @@ class StreamHandler:
                                 ).lower()
                             ]
                             vehicle_count = len(vehicles_today)
-                            # if vehicles_today:
-                            #     self.log(f"[COUNT] today={today_str} vehicles_with_top_direction={vehicles_today} total={vehicle_count}")
+                            
+                            # Get today's vehicles summary from plate_processor
+                            vehicle_list = plate_processor.get_today_vehicles_summary()
 
-                            # Draw text on frame
-                            text = f"Xe vao: {vehicle_count}"
+                            # Draw total count on frame (top-right corner)
+                            text_total = f"Total Vehicles: {vehicle_count}"
                             font = cv2.FONT_HERSHEY_SIMPLEX
-                            font_scale = 1.2
+                            font_scale = 1.0
                             font_color = (0, 255, 0)  # Green
                             font_thickness = 2
                             text_size = cv2.getTextSize(
-                                text, font, font_scale, font_thickness
+                                text_total, font, font_scale, font_thickness
                             )[0]
 
                             # Position: top-right corner with padding
-                            x = display_frame_resized.shape[1] - text_size[0] - 20
-                            y = 40
+                            x_total = display_frame_resized.shape[1] - text_size[0] - 20
+                            y_total = 40
 
                             # Draw background rectangle for better visibility
                             cv2.rectangle(
                                 display_frame_resized,
-                                (x - 10, y - text_size[1] - 10),
-                                (x + text_size[0] + 10, y + 10),
+                                (x_total - 10, y_total - text_size[1] - 10),
+                                (x_total + text_size[0] + 10, y_total + 10),
                                 (0, 0, 0),
                                 -1,
                             )
 
-                            # Draw text
+                            # Draw total count text
                             cv2.putText(
                                 display_frame_resized,
-                                text,
-                                (x, y),
+                                text_total,
+                                (x_total, y_total),
                                 font,
                                 font_scale,
                                 font_color,
                                 font_thickness,
                             )
+
+                            # Draw vehicle list with plates and counts (left side) - detailed view
+                            if vehicle_list:
+                                y_list = 80
+                                line_height = 38
+                                max_vehicles_display = 8  # Show max 8 vehicles (more space for detail)
+                                
+                                # Title with background
+                                title_text = "Detail Vehicle List"
+                                title_size = cv2.getTextSize(title_text, font, 0.9, 2)[0]
+                                cv2.rectangle(
+                                    display_frame_resized,
+                                    (10, y_list - title_size[1]),
+                                    (340, y_list + 18),
+                                    (0, 100, 255),  # Orange background
+                                    -1,
+                                )
+                                cv2.putText(
+                                    display_frame_resized,
+                                    title_text,
+                                    (20, y_list + 10),
+                                    font,
+                                    0.9,
+                                    (255, 255, 255),  # White text
+                                    2,
+                                )
+                                y_list += line_height + 5
+                                
+                                # Draw separator line
+                                cv2.line(
+                                    display_frame_resized,
+                                    (10, y_list - 10),
+                                    (340, y_list - 10),
+                                    (0, 255, 255),
+                                    2,
+                                )
+                                y_list += 5
+                                
+                                # Calculate total for percentage
+                                total_count = sum(count for _, count in vehicle_list)
+                                
+                                # Draw each vehicle info with details
+                                for idx, (plate, count) in enumerate(vehicle_list[:max_vehicles_display]):
+                                    # Format: "1. 29A12345        3 xe"
+                                    vehicle_text = f"{idx+1}. {plate}"
+                                    detail_text = f"{count} xe"
+                                    
+                                    # Background for vehicle entry
+                                    bg_color = (20, 80, 150)  # Dark blue background
+                                    cv2.rectangle(
+                                        display_frame_resized,
+                                        (10, y_list - 5),
+                                        (310, y_list + line_height - 10),
+                                        bg_color,
+                                        -1,
+                                    )
+                                    
+                                    # Draw border
+                                    cv2.rectangle(
+                                        display_frame_resized,
+                                        (10, y_list - 5),
+                                        (310, y_list + line_height - 10),
+                                        (0, 255, 255),  # Cyan border
+                                        2,
+                                    )
+                                    
+                                    # Draw plate number (large)
+                                    cv2.putText(
+                                        display_frame_resized,
+                                        vehicle_text,
+                                        (20, y_list + 20),
+                                        cv2.FONT_HERSHEY_SIMPLEX,
+                                        0.85,
+                                        (0, 255, 0),  # Green for plate
+                                        3,  # Thicker for bold effect
+                                    )
+                                    
+                                    # Draw count and percentage (smaller, right aligned)
+                                    detail_size = cv2.getTextSize(detail_text, font, 0.7, 1)[0]
+                                    cv2.putText(
+                                        display_frame_resized,
+                                        detail_text,
+                                        (290 - detail_size[0], y_list + 15),
+                                        font,
+                                        0.7,
+                                        (255, 255, 0),  # Yellow for count
+                                        1,
+                                    )
+                                    
+                                    y_list += line_height
                         except Exception as e:
-                            self.log(f"Lỗi hiển thị số lượng xe: {e}")
+                            self.log(f"Loi hien thi bien so xe: {e}")
 
                     cv2.imshow(
                         "Vehicle Detection - Streaming Mode", display_frame_resized

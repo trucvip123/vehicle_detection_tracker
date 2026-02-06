@@ -147,7 +147,7 @@ def detect_license_plate_sync(
         # Check plate model
         if plate_model is None:
             _log("[PLATE_DETECT] ❌ plate_model is None, return None")
-            return {"text": None, "bbox": None}
+            return {"text": None, "count": None}
 
         _log(
             f"[PLATE_DETECT] Vehicle frame shape: {vehicle_frame.shape if vehicle_frame is not None else 'None'}"
@@ -159,16 +159,17 @@ def detect_license_plate_sync(
 
         if results is None:
             _log("[PLATE_DETECT] ❌ Inference results is None")
-            return {"text": None, "bbox": None}
+            return {"text": None, "count": None}
 
         # Log all raw detections for debugging
         pred = results.pred[0]
         num_detections = pred.shape[0]
         if num_detections == 0:
             _log("[PLATE_DETECT] ❌ Không có detection nào (pred shape = 0)")
-            return {"text": None, "bbox": None}
+            return {"text": None, "count": None}
 
         _log(f"[PLATE_DETECT] Raw detections: {num_detections}")
+        
         for i in range(num_detections):
             bbox = pred[i][:4].tolist()
             conf = float(pred[i][4])
@@ -215,19 +216,19 @@ def detect_license_plate_sync(
             _log(
                 f"[PLATE_DETECT] ❌ Confidence quá thấp ({confidence:.3f} < {min_confidence}), return None"
             )
-            return {"text": None, "bbox": None}
+            return {"text": None, "count": num_detections}
 
         if length_plate < min_width:
             _log(
                 f"[PLATE_DETECT] ❌ Plate quá nhỏ (width={length_plate} < {min_width}), return None"
             )
-            return {"text": None, "bbox": None}
+            return {"text": None, "count": num_detections}
 
         if height_plate < min_height:
             _log(
                 f"[PLATE_DETECT] ❌ Plate quá nhỏ (height={height_plate} < {min_height}), return None"
             )
-            return {"text": None, "bbox": None}
+            return {"text": None, "count": num_detections}
 
         # Validate bbox coordinates against frame dimensions để tránh index out of bounds
         frame_height, frame_width = vehicle_frame.shape[:2]
@@ -240,7 +241,7 @@ def detect_license_plate_sync(
         plate_image = vehicle_frame[y1:y2, x1:x2]
         if plate_image.size == 0:
             _log("[PLATE_DETECT] ❌ Plate image size = 0, return None")
-            return {"text": None, "bbox": None}
+            return {"text": None, "count": num_detections}
 
         _log(f"[PLATE_DETECT] ✓ Extracted plate image shape: {plate_image.shape}")
 
@@ -252,7 +253,7 @@ def detect_license_plate_sync(
         # Check OCR reader
         if ocr_reader is None:
             _log("[PLATE_DETECT] ⚠ OCR reader is None, return bbox only")
-            return {"text": None, "bbox": (x1, y1, x2, y2)}
+            return {"text": None, "count": num_detections}
 
         # Try OCR with different deskew directions
         _log("[PLATE_DETECT] Bắt đầu OCR với các hướng xoay khác nhau...")
@@ -278,7 +279,7 @@ def detect_license_plate_sync(
                         _log(
                             f"[PLATE_DETECT] ✓ Tìm thấy biển số: '{lp}' (direction={direction}, center_thres={center_thres})"
                         )
-                        return {"text": lp, "bbox": (x1, y1, x2, y2)}
+                        return {"text": lp, "count": num_detections}
                 except Exception as ocr_error:
                     _log(
                         f"[PLATE_DETECT] ⚠ OCR error (direction={direction}, center_thres={center_thres}): {ocr_error}"
@@ -287,11 +288,10 @@ def detect_license_plate_sync(
         _log(
             f"[PLATE_DETECT] ⚠ Không đọc được biển số sau tất cả các lần thử, return: '{lp}'"
         )
-        return {"text": lp, "bbox": (x1, y1, x2, y2)}
-
+        return {"text": lp, "count": num_detections}
     except Exception as e:
         _log(f"[PLATE_DETECT] ❌ ERROR in license plate detection: {e}")
         import traceback
 
         _log(f"[PLATE_DETECT] Traceback: {traceback.format_exc()}")
-        return {"text": None, "bbox": None}
+        return {"text": None, "count": None}

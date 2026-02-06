@@ -25,6 +25,9 @@ class FrameProcessor:
         self.vehicle_timestamps = defaultdict(
             lambda: {"timestamps": [], "positions": []}
         )
+        # Temporary vehicle IDs for current session (detected but not yet persisted in JSON)
+        self.temp_vehicle_ids = set()
+        
         # Load config for detection and tracking
         self.detection_config = get_detection_config()
         self.vehicle_classes = self.detection_config.get(
@@ -116,7 +119,7 @@ class FrameProcessor:
                         int(x - w / 2) : int(x + w / 2),
                     ]
                     vehicle_frame = frame[
-                        int(y - h / 2 + 160) : int(y + h / 2 + 40),
+                        int(y - h / 2 + 200) : int(y + h / 2 + 40),
                         int(x - w / 2) : int(x + w / 2),
                     ]
                     filename = f"{vehicle_dir}/vehicle_frame_{timestamp_str}.png"
@@ -130,8 +133,8 @@ class FrameProcessor:
                     f"[DEBUG] Updated vehicle_last_seen[{track_id}] = {frame_timestamp}"
                 )
                 plate_processor._save_state()  # Persist state after updating
-                if track_id not in plate_processor.vehicle_missing_frames:
-                    plate_processor.vehicle_missing_frames[track_id] = 0
+
+                # Reset missing frames counter when vehicle is detected
                 plate_processor.vehicle_missing_frames[track_id] = 0
 
                 # Update tracking history
@@ -190,12 +193,37 @@ class FrameProcessor:
                     )
 
         # Update missing frame counts for vehicles not detected
-        all_tracked_ids = set(plate_processor.vehicle_last_seen.keys())
-        missing_ids = all_tracked_ids - current_track_ids
+        # Separate tracking: today_vehicle_ids (from JSON) vs temp_vehicle_ids (current session)
+        today_str = datetime.now().strftime("%Y%m%d")
+        today_vehicle_ids = set()
 
+        for track_id, ts in plate_processor.vehicle_last_seen.items():
+            if hasattr(ts, "strftime") and ts.strftime("%Y%m%d") == today_str:
+                today_vehicle_ids.add(track_id)
+        
+        # print("[DEBUG] today_vehicle_ids (from JSON):", today_vehicle_ids)
+        
+        if self.temp_vehicle_ids:
+            self.log(f"[DEBUG] temp_vehicle_ids (session): {self.temp_vehicle_ids}")
+        # print("[DEBUG] current_track_ids (now):", current_track_ids)
+        
+        # Step 1: Remove vehicles from temp_vehicle_ids if already saved in JSON
+        self.temp_vehicle_ids = self.temp_vehicle_ids - today_vehicle_ids
+        
+        # Step 2: Add newly detected vehicles to temp_vehicle_ids
+        new_vehicles = current_track_ids - today_vehicle_ids
+        self.temp_vehicle_ids.update(new_vehicles)
+        
+        # Step 3: Calculate missing vehicles (in temp_vehicle_ids but not in current_track_ids)
+        missing_ids = self.temp_vehicle_ids - current_track_ids
+
+        # Step 4: Increment missing_frames only for vehicles in temp_vehicle_ids
         for track_id in missing_ids:
             if track_id not in plate_processor.vehicle_missing_frames:
                 plate_processor.vehicle_missing_frames[track_id] = 0
             plate_processor.vehicle_missing_frames[track_id] += 1
+            self.log(
+                f"[TRACK] vehicle_id={track_id} missing_frame_count={plate_processor.vehicle_missing_frames[track_id]}"
+            )
 
         return frame

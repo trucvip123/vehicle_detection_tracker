@@ -8,6 +8,16 @@ Example:
     python test_plate_detection.py screenshots/vehicle_frame_20260104_132626_159.png
 """
 
+import os
+import warnings
+
+# Set environment variables BEFORE importing any libraries
+os.environ["DISABLE_MODEL_SOURCE_CHECK"] = "True"
+os.environ["PADDLE_EXTENSION_COMPILE_FLAG"] = "0"
+os.environ["HF_HUB_OFFLINE"] = "1"
+warnings.filterwarnings("ignore", category=UserWarning)
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+
 import cv2
 import sys
 import threading

@@ -3,6 +3,16 @@ Example: Streaming camera with license plate display in corner
 Optimized for real-time performance - no bounding boxes, only plate text
 """
 
+import os
+import warnings
+
+# Set environment variables BEFORE importing any libraries
+os.environ["DISABLE_MODEL_SOURCE_CHECK"] = "True"
+os.environ["PADDLE_EXTENSION_COMPILE_FLAG"] = "0"
+os.environ["HF_HUB_OFFLINE"] = "1"
+warnings.filterwarnings("ignore", category=UserWarning)
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+
 from VehicleDetectionTracker.VehicleDetectionTracker import VehicleDetectionTracker
 
 

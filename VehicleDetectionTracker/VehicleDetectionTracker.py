@@ -1,6 +1,20 @@
 import logging
 from concurrent.futures import ThreadPoolExecutor
 import os
+import warnings
+
+# Set environment variables BEFORE importing any libraries to suppress warnings
+os.environ["DISABLE_MODEL_SOURCE_CHECK"] = "True"
+os.environ["PADDLE_EXTENSION_COMPILE_FLAG"] = "0"  # Disable ccache warning
+os.environ["HF_HUB_OFFLINE"] = "1"  # Disable Hugging Face online checks
+os.environ["PYTHONWARNINGS"] = "ignore"
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"  # Suppress TensorFlow logging
+os.environ["GLOG_minloglevel"] = "2"  # Suppress glog (OneDNN)
+os.environ["PADDLE_GLOG_LEVEL"] = "2"  # Suppress PaddlePaddle glog
+os.environ["MKL_THREADING_LAYER"] = "GNU"  # Suppress OneDNN threading
+
+warnings.filterwarnings("ignore", category=UserWarning)
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 from ultralytics import YOLO
 
@@ -23,6 +37,8 @@ from VehicleDetectionTracker.stream_handler import StreamHandler
 from VehicleDetectionTracker.image_utils_helper import draw_plate_text_corner
 
 logging.getLogger("ultralytics").setLevel(logging.WARNING)
+logging.getLogger("paddleocr").setLevel(logging.WARNING)
+logging.getLogger("paddle").setLevel(logging.WARNING)
 
 # Suppress FFmpeg/HEVC codec warnings
 os.environ["FFREPORT"] = "file=/dev/null"

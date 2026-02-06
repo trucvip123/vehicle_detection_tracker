@@ -3,12 +3,46 @@ PaddleOCR Wrapper cho License Plate Recognition
 Thay thế yolo_license_plate bằng PaddleOCR
 """
 
+import os
+import sys
+import warnings
+import logging
+
+# Suppress PaddleOCR warnings and info messages - SET BEFORE ANY IMPORTS
+os.environ["PADDLE_EXTENSION_COMPILE_FLAG"] = "0"  # Disable ccache warning
+os.environ["HF_HUB_OFFLINE"] = "1"  # Disable Hugging Face online checks
+os.environ["PADDLEOCR_HOME"] = os.path.expanduser("~/.paddleocr")  # Set PaddleOCR cache dir
+os.environ["PYTHONWARNINGS"] = "ignore"  # Ignore all Python warnings
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"  # Suppress TensorFlow logging
+os.environ["GLOG_minloglevel"] = "2"  # Suppress glog logging (OneDNN, etc)
+os.environ["PADDLE_GLOG_LEVEL"] = "2"  # Suppress PaddlePaddle glog
+os.environ["MKL_THREADING_LAYER"] = "GNU"  # Suppress OneDNN threading messages
+
+warnings.filterwarnings("ignore", category=UserWarning)  # Ignore UserWarnings
+warnings.filterwarnings("ignore", category=DeprecationWarning)  # Ignore DeprecationWarnings
+
 import cv2
 import numpy as np
-from paddleocr import PaddleOCR
 import re
 import collections
-import logging
+
+# Suppress all logging before importing PaddleOCR
+logging.disable(logging.INFO)
+logging.disable(logging.DEBUG)
+
+# Redirect stderr/stdout temporarily to capture PaddleOCR's import messages
+from io import StringIO
+_old_stderr = sys.stderr
+_old_stdout = sys.stdout
+sys.stderr = StringIO()
+sys.stdout = StringIO()
+
+try:
+    from paddleocr import PaddleOCR
+finally:
+    sys.stderr = _old_stderr
+    sys.stdout = _old_stdout
+    logging.disable(logging.NOTSET)
 
 # Try to import logging utility
 try:
@@ -21,8 +55,11 @@ except ImportError:
         )
 
 
-# Module logger
+# Module logger - suppress PaddleOCR debug/info logs
 logger = logging.getLogger(__name__)
+logging.getLogger("paddleocr").setLevel(logging.CRITICAL)
+logging.getLogger("paddlepaddle").setLevel(logging.CRITICAL)
+logging.getLogger("paddle").setLevel(logging.CRITICAL)
 
 
 class PaddleOCRWrapper:
@@ -61,81 +98,37 @@ class PaddleOCRWrapper:
 
     def _init_ocr(self):
         """Khởi tạo PaddleOCR"""
+        import sys
+        from io import StringIO
+        
         try:
-            # Chuẩn bị tham số khởi tạo
-            ocr_kwargs = dict(
-                lang=self.lang,
-                use_angle_cls=self.use_angle_cls,
-            )
-
-            # Phiên bản PaddleOCR mới không hỗ trợ tham số use_gpu trực tiếp
-            # PaddleOCR sẽ tự động phát hiện GPU dựa trên PaddlePaddle được cài đặt
-            # Kiểm tra và log GPU status (chỉ để thông báo)
-            device_info = "auto (PaddleOCR tự phát hiện)"
+            # Capture stderr to suppress PaddleOCR info messages
+            old_stderr = sys.stderr
+            sys.stderr = StringIO()
+            
             try:
-                import paddle
+                # Chuẩn bị tham số khởi tạo
+                ocr_kwargs = dict(
+                    lang=self.lang,
+                    use_angle_cls=self.use_angle_cls,
+                )
 
-                # Kiểm tra xem PaddlePaddle có được compile với CUDA không
-                if paddle.device.is_compiled_with_cuda():
-                    _log_ocr(
-                        "✓ PaddleOCR: PaddlePaddle hỗ trợ GPU, sẽ tự động sử dụng GPU nếu có",
-                        "ocr",
-                    )
-                    device_info = "GPU (auto-detected)"
-                else:
-                    _log_ocr(
-                        "✓ PaddleOCR: PaddlePaddle được compile cho CPU, sử dụng CPU",
-                        "ocr",
-                    )
-                    device_info = "CPU"
-            except Exception:
-                # Nếu không import được paddle, để PaddleOCR tự phát hiện
+                # Khởi tạo PaddleOCR với tham số đã cấu hình
+                # Lưu ý: KHÔNG truyền use_gpu vào ocr_kwargs vì PaddleOCR mới không hỗ trợ tham số này
+                # PaddleOCR sẽ tự động sử dụng GPU nếu PaddlePaddle-GPU được cài đặt
+                self.ocr = PaddleOCR(**ocr_kwargs)
                 _log_ocr(
-                    "✓ PaddleOCR: PaddleOCR sẽ tự động chọn device (CPU hoặc GPU)",
+                    f"✓ PaddleOCR initialized successfully (lang={self.lang})",
                     "ocr",
                 )
 
-            # Lưu ý: use_gpu parameter chỉ để thông báo, không ảnh hưởng đến PaddleOCR
-            # PaddleOCR mới tự động phát hiện dựa trên PaddlePaddle được cài đặt
-            if self.use_gpu is False:
-                _log_ocr(
-                    "⚠ PaddleOCR: Lưu ý - use_gpu=False được chỉ định nhưng PaddleOCR mới tự động phát hiện device",
-                    "ocr",
-                )
-                device_info = "CPU (requested, nhưng PaddleOCR tự quyết định)"
-            elif self.use_gpu is True:
-                _log_ocr(
-                    "✓ PaddleOCR: Cố gắng sử dụng GPU (nếu PaddlePaddle-GPU được cài đặt)",
-                    "ocr",
-                )
-                device_info = "GPU (requested)"
-
-            # Bật cấu hình "lite" nếu người dùng yêu cầu
-            # - Ưu tiên dùng model dir nhỏ nếu được cung cấp và tồn tại
-            # - Nếu không, vẫn dùng mobile models mặc định của PaddleOCR
-            if self.lite:
-                import os
-
-                if self.det_model_dir and os.path.isdir(self.det_model_dir):
-                    ocr_kwargs["det_model_dir"] = self.det_model_dir
-                if self.rec_model_dir and os.path.isdir(self.rec_model_dir):
-                    ocr_kwargs["rec_model_dir"] = self.rec_model_dir
-                # Sử dụng phiên bản mobile của PP-OCR (nhanh/nhẹ)
-                ocr_kwargs["ocr_version"] = "PP-OCRv3"
-                # Set cpu_threads cho CPU mode (không ảnh hưởng nếu dùng GPU)
-                ocr_kwargs["cpu_threads"] = 4
-
-            # Khởi tạo PaddleOCR với tham số đã cấu hình
-            # Lưu ý: KHÔNG truyền use_gpu vào ocr_kwargs vì PaddleOCR mới không hỗ trợ tham số này
-            # PaddleOCR sẽ tự động sử dụng GPU nếu PaddlePaddle-GPU được cài đặt
-            self.ocr = PaddleOCR(**ocr_kwargs)
-            _log_ocr(
-                f"OK: PaddleOCR initialized successfully (lang={self.lang}, device={device_info})",
-                "ocr",
-            )
-
+            finally:
+                # Restore stderr
+                sys.stderr = old_stderr
+                
         except Exception as e:
-            _log_ocr(f"ERROR: Error initializing PaddleOCR: {e}", "ocr")
+            sys.stderr = old_stderr
+            _log_ocr(f"✗ Error initializing PaddleOCR: {e}", "ocr")
             raise
 
     def read_license_plate(self, image):
@@ -188,7 +181,7 @@ class PaddleOCRWrapper:
                             scores = result["rec_scores"]
 
                             for text, confidence in zip(texts, scores):
-                                print("text, confidence:", text, confidence)
+                                # print("text, confidence:", text, confidence)
                                 has_number = bool(re.search(r"\d", text))
                                 if (
                                     confidence > 0.3 and has_number
@@ -347,13 +340,16 @@ class PaddleOCRWrapper:
             most_common = counts.most_common(1)[0][0]
             if not re.search(r"[A-Za-z]", most_common):
                 return None
-
-            split_plate = most_common.split('-')
-            length_province = len(split_plate[0])
-            if length_province != 3:
-                return None
-            
             plate = most_common[:2].replace("B", "8") + most_common[2:]
+        
+        split_plate = plate.split('-')
+        length_province = len(split_plate[0])
+        number_part = split_plate[1] if len(split_plate) > 1 else ''
+
+        if re.search(r"[A-Za-z]", number_part):
+            return None
+        if length_province != 3:
+            return None
         # print(f"DEBUG: plate before format: {plate}")
         # Làm sạch định dạng kiểu 77A33151 -> 77A-331.51
         plate = re.sub(r"^(\d{2}[A-Z])[- ]?(\d{3})(\d{2})$", r"\1-\2.\3", plate)
