@@ -4,6 +4,7 @@ import numpy as np
 import torch
 from datetime import datetime
 from pathlib import Path
+from ultralytics import YOLO
 
 from VehicleDetectionTracker.function import utils_rotate, helper
 
@@ -35,39 +36,76 @@ def _log(message):
 
 
 def initialize_plate_detector(model_path="model/LP_detector.pt", device=None):
-    """Load and return the license plate detector (yolov5 custom) or None on error.
+    """Load and return the license plate detector (YOLOv8/YOLOv5) or None on error.
 
     Args:
-        model_path (str): Path to the model file
+        model_path (str): Path to the model file (YOLOv8 or YOLOv5 format)
         device (str): Device to use ('cuda' or 'cpu'). If None, auto-detect.
     """
     try:
-        # Tự động detect device nếu không được chỉ định
+        # Auto-detect device if not specified
         if device is None:
-            device = "cuda:0" if torch.cuda.is_available() else "cpu"
-        elif device == "cuda":
-            # Convert 'cuda' to 'cuda:0' for YOLOv5 compatibility
-            device = "cuda:0"
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+        elif device == "cuda:0":
+            # Convert 'cuda:0' to 'cuda' for compatibility
+            device = "cuda"
+        
+        # Verify model file exists
+        model_file = Path(model_path)
+        if not model_file.exists():
+            _log(f"[PLATE_DETECTOR] ⚠ Model file not found: {model_path}, trying alternative path...")
+            # Try alternative path with default name
+            model_file = Path("model/license_plate_detector.pt")
+            if model_file.exists():
+                model_path = str(model_file)
+            else:
+                raise FileNotFoundError(f"Model file not found at {model_path} or model/license_plate_detector.pt")
 
-        plate_model = torch.hub.load(
-            "yolov5",
-            "custom",
-            path=model_path,
-            force_reload=False,
-            source="local",
-            device=device,  # Chỉ định device
-        )
-
-        # Chuyển model sang GPU nếu cần
-        if "cuda" in device and torch.cuda.is_available():
+        # Try loading as YOLOv8 model first
+        _log(f"[PLATE_DETECTOR] Loading model from {model_path} on device={device}...")
+        try:
+            plate_model = YOLO(model_path)
             plate_model.to(device)
-            _log(
-                f"[PLATE_DETECTOR] ✓ Model loaded và chuyển sang GPU: {torch.cuda.get_device_name(0)}"
-            )
-        else:
-            _log("[PLATE_DETECTOR] ✓ Model loaded (sử dụng CPU)")
-
-        return plate_model
+            
+            if device == "cuda" and torch.cuda.is_available():
+                _log(
+                    f"[PLATE_DETECTOR] ✓ YOLOv8 model loaded and moved to GPU: {torch.cuda.get_device_name(0)}"
+                )
+            else:
+                _log("[PLATE_DETECTOR] ✓ YOLOv8 model loaded (using CPU)")
+            
+            return plate_model
+            
+        except Exception as yolov8_error:
+            # Fallback: Try loading as YOLOv5 model using torch.hub
+            _log(f"[PLATE_DETECTOR] ⚠ YOLOv8 loading failed: {str(yolov8_error)[:100]}...")
+            _log(f"[PLATE_DETECTOR] Attempting YOLOv5 fallback loading...")
+            
+            try:
+                # Add yolov5 directory to sys.path for local loading
+                import sys
+                yolov5_path = Path(__file__).parent.parent / "yolov5"
+                if str(yolov5_path) not in sys.path:
+                    sys.path.insert(0, str(yolov5_path))
+                
+                # Try torch.hub.load for YOLOv5
+                plate_model = torch.hub.load(
+                    "ultralytics/yolov5",
+                    "custom",
+                    path=model_path,
+                    force_reload=False,
+                    device=device,
+                )
+                
+                _log(
+                    f"[PLATE_DETECTOR] ✓ YOLOv5 model loaded (fallback method)"
+                )
+                return plate_model
+                
+            except Exception as yolov5_error:
+                _log(f"[PLATE_DETECTOR] ⚠ YOLOv5 fallback also failed: {yolov5_error}")
+                raise Exception(f"Failed to load model with both YOLOv8 and YOLOv5 methods. YOLOv8 error: {yolov8_error}, YOLOv5 error: {yolov5_error}")
+    
     except Exception as e:
         _log(f"Error loading license plate model: {e}")
         return None
@@ -89,7 +127,7 @@ def preprocess_plate_image(plate_image):
 
 
 def _sync_plate_inference(plate_model, vehicle_frame, model_lock, size=None):
-    """Run plate model synchronously in a thread-safe way and return results or None."""
+    """Run plate model synchronously in a thread-safe way and return results or None (YOLOv8)."""
     if plate_model is None:
         return None
 
@@ -98,35 +136,31 @@ def _sync_plate_inference(plate_model, vehicle_frame, model_lock, size=None):
         _log("[PLATE_INFERENCE] ❌ vehicle_frame is None or empty")
         return None
 
-    # Load config nếu size không được chỉ định
+    # Load config if size not specified
     if size is None:
         try:
             from VehicleDetectionTracker.config_loader import get_plate_detection_config
 
             plate_config = get_plate_detection_config()
             size = plate_config.get(
-                "image_size", 1280
-            )  # Default: 1280 cho license plate
+                "image_size", 640
+            )  # Default: 640 for YOLOv8
         except:
             size = 640
 
     try:
         with model_lock:
-            # YOLOv5 AutoShape model: set imgsz attribute before calling
-            # Save original imgsz to restore later (if needed)
-            original_imgsz = getattr(plate_model, "imgsz", None)
-            plate_model.imgsz = size
-            result = plate_model(vehicle_frame)
-            # Restore original imgsz if it existed
-            if original_imgsz is not None:
-                plate_model.imgsz = original_imgsz
-            return result
+            # YOLOv8: inference with imgsz parameter
+            results = plate_model.predict(vehicle_frame, imgsz=size, verbose=False)
+            # Returns a list of Results objects, take the first one
+            return results[0] if results else None
     except Exception as e:
         _log(f"[PLATE_INFERENCE] ❌ Error during inference with imgsz={size}: {e}")
-        # Fallback: thử gọi không có size parameter (use default)
+        # Fallback: try without size parameter (use default)
         try:
             with model_lock:
-                return plate_model(vehicle_frame)
+                results = plate_model.predict(vehicle_frame, verbose=False)
+                return results[0] if results else None
         except Exception as e2:
             _log(f"[PLATE_INFERENCE] ❌ Fallback inference also failed: {e2}")
             return None
@@ -140,7 +174,7 @@ def detect_license_plate_sync(
     timestamp_str,
     vehicle_dir="screenshots",
 ):
-    """Detect license plate synchronously with detailed logging for debugging."""
+    """Detect license plate synchronously with detailed logging for debugging (YOLOv8)."""
     try:
         _log("[PLATE_DETECT] Bắt đầu detect license plate")
 
@@ -161,29 +195,26 @@ def detect_license_plate_sync(
             _log("[PLATE_DETECT] ❌ Inference results is None")
             return {"text": None, "count": None}
 
-        # Log all raw detections for debugging
-        pred = results.pred[0]
-        num_detections = pred.shape[0]
+        # YOLOv8: Use boxes attribute instead of pred
+        boxes = results.boxes
+        num_detections = len(boxes) if boxes is not None else 0
+        
         if num_detections == 0:
-            _log("[PLATE_DETECT] ❌ Không có detection nào (pred shape = 0)")
-            return {"text": None, "count": None}
+            _log("[PLATE_DETECT] ❌ Không có detection nào")
+            return {"text": None, "count": 0}
 
         _log(f"[PLATE_DETECT] Raw detections: {num_detections}")
         
-        for i in range(num_detections):
-            bbox = pred[i][:4].tolist()
-            conf = float(pred[i][4])
+        # Log all detections
+        for i, box in enumerate(boxes):
+            bbox = box.xyxy[0].tolist()  # [x1, y1, x2, y2]
+            conf = float(box.conf[0])
             _log(f"[PLATE_DETECT] Detection {i}: bbox={bbox}, confidence={conf:.3f}")
 
-        pred = results.pred[0]
-        num_detections = pred.shape[0]
-        _log(f"[PLATE_DETECT] ✓ Tìm thấy {num_detections} detection(s)")
-
         # Get best detection (highest confidence)
-        best_det_idx = pred[:, 4].argmax()
-        best_det = pred[best_det_idx]
-        confidence = float(best_det[4])
-        x1, y1, x2, y2 = map(int, best_det[:4].tolist())
+        best_box = boxes[0]  # boxes are sorted by confidence by default
+        confidence = float(best_box.conf[0])
+        x1, y1, x2, y2 = map(int, best_box.xyxy[0].tolist())
 
         _log(
             f"[PLATE_DETECT] Best detection: bbox=({x1},{y1},{x2},{y2}), confidence={confidence:.3f}"
@@ -196,7 +227,7 @@ def detect_license_plate_sync(
             f"[PLATE_DETECT] Plate dimensions: width={length_plate}, height={height_plate}"
         )
 
-        # Load config cho plate detection
+        # Load config for plate detection
         try:
             from VehicleDetectionTracker.config_loader import (
                 get_plate_detection_config,
@@ -230,7 +261,7 @@ def detect_license_plate_sync(
             )
             return {"text": None, "count": num_detections}
 
-        # Validate bbox coordinates against frame dimensions để tránh index out of bounds
+        # Validate bbox coordinates against frame dimensions to avoid index out of bounds
         frame_height, frame_width = vehicle_frame.shape[:2]
         x1 = max(0, min(x1, frame_width - 1))
         y1 = max(0, min(y1, frame_height - 1))
@@ -246,7 +277,6 @@ def detect_license_plate_sync(
         _log(f"[PLATE_DETECT] ✓ Extracted plate image shape: {plate_image.shape}")
 
         # Save plate image
-        # Save license frame in the same track_id folder
         filename = f"{vehicle_dir}/license_frame_{timestamp_str}.png"
         cv2.imwrite(filename, plate_image)
 

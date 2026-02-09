@@ -48,6 +48,9 @@ class FrameProcessor:
         Returns:
             numpy.ndarray: Frame with license plates displayed in corner.
         """
+        # Check and reset daily tracking at start of each day
+        plate_processor.check_and_reset_daily_tracking()
+        
         tracking_config = get_tracking_config()
         results = self.model.track(
             frame,
@@ -119,11 +122,13 @@ class FrameProcessor:
                         int(x - w / 2) : int(x + w / 2),
                     ]
                     vehicle_frame = frame[
-                        int(y - h / 2 + 200) : int(y + h / 2 + 40),
+                        int(y - h / 2 + 300) : int(y + h / 2 + 40),
                         int(x - w / 2) : int(x + w / 2),
                     ]
                     filename = f"{vehicle_dir}/vehicle_frame_{timestamp_str}.png"
+                    filename_process = f"{vehicle_dir}/vehicle_frame_process_{timestamp_str}.png"
                     cv2.imwrite(filename, vehicle_frame_save_img)
+                    cv2.imwrite(filename_process, vehicle_frame)
                 except Exception as e:
                     self.log(f"Error saving frame: {e}")
 
@@ -217,13 +222,22 @@ class FrameProcessor:
         # Step 3: Calculate missing vehicles (in temp_vehicle_ids but not in current_track_ids)
         missing_ids = self.temp_vehicle_ids - current_track_ids
 
-        # Step 4: Increment missing_frames only for vehicles in temp_vehicle_ids
+        # Step 4: Increment missing_frames only for vehicles in temp_vehicle_ids (and are entering, not exiting)
         for track_id in missing_ids:
-            if track_id not in plate_processor.vehicle_missing_frames:
-                plate_processor.vehicle_missing_frames[track_id] = 0
-            plate_processor.vehicle_missing_frames[track_id] += 1
-            self.log(
-                f"[TRACK] vehicle_id={track_id} missing_frame_count={plate_processor.vehicle_missing_frames[track_id]}"
-            )
+            # Check if vehicle is entering (not exiting)
+            direction = plate_processor.vehicle_directions.get(track_id, "Unknown")
+            # Only count missing frames for entering vehicles (not for exiting/"top" vehicles)
+            if direction and "top" not in direction.lower():
+                if track_id not in plate_processor.vehicle_missing_frames:
+                    plate_processor.vehicle_missing_frames[track_id] = 0
+                plate_processor.vehicle_missing_frames[track_id] += 1
+                self.log(
+                    f"[TRACK] vehicle_id={track_id} missing_frame_count={plate_processor.vehicle_missing_frames[track_id]}"
+                )
+            else:
+                # Skip counting for exiting vehicles
+                self.log(
+                    f"[TRACK] vehicle_id={track_id} Skipping missing_frame count (direction={direction}, vehicle is exiting)"
+                )
 
         return frame

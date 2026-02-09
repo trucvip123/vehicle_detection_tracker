@@ -46,7 +46,7 @@ plate_detection:
   #   - 1280: Cân bằng tốt nhất cho biển số nhỏ/xa (khuyến nghị cho production)
   #   - 1920: Độ chính xác cao nhất nhưng chậm (phù hợp khi độ chính xác là ưu tiên)
   # Lưu ý: Kích thước lớn hơn = độ chính xác cao hơn nhưng tốc độ chậm hơn
-  image_size: 1280
+  image_size: 640
   
   # Confidence threshold tối thiểu cho plate detection (0.0 - 1.0)
   # Giá trị cao hơn = chính xác hơn nhưng có thể bỏ sót một số biển số
@@ -125,7 +125,7 @@ paths:
   yolo_model: "yolov8n.pt"
   
   # Đường dẫn đến model license plate detector
-  plate_model: "model/LP_detector.pt"
+  plate_model: "model/license_plate_detector.pt"
   
   # Thư mục lưu screenshots
   screenshots_dir: "screenshots"

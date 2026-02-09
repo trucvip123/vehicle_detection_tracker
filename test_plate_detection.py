@@ -60,6 +60,7 @@ def test_plate_detection(image_path, use_gpu=None):
         print(f"❌ Error: Could not load image from {image_path}")
         return
 
+    vehicle_frame = vehicle_frame[50:, 100:-100]  # Crop sides if needed
     print(f"✓ Image loaded successfully")
     print(f"  - Shape: {vehicle_frame.shape}")
     print(f"  - Size: {vehicle_frame.shape[1]}x{vehicle_frame.shape[0]}")
@@ -67,7 +68,7 @@ def test_plate_detection(image_path, use_gpu=None):
     # Initialize plate detector
     print(f"\n🔍 Initializing license plate detector...")
     plate_model = initialize_plate_detector(
-        model_path="model/LP_detector.pt", device=use_gpu
+        model_path="model/license_plate_detector.pt", device=use_gpu
     )
 
     if plate_model is None:
@@ -112,88 +113,14 @@ def test_plate_detection(image_path, use_gpu=None):
     print(f"\n📊 Results:")
     print("=" * 60)
 
-    if result["bbox"] is not None:
-        x1, y1, x2, y2 = result["bbox"]
-        print(f"✓ License plate detected!")
-        print(f"  - Bounding box: ({x1}, {y1}) to ({x2}, {y2})")
-        print(f"  - Width: {x2 - x1}px")
-        print(f"  - Height: {y2 - y1}px")
-
-        if result["text"] is not None and result["text"] != "unknown":
-            print(f"  - License plate text: {result['text']}")
-        else:
-            print(
-                f"  - License plate text: Not recognized (OCR failed or not available)"
-            )
+    if result["text"] is not None and result["text"] != "unknown":
+        print(f"  - License plate text: {result['text']}")
     else:
-        print(f"❌ No license plate detected")
-
-    # Draw results on image and save
-    if result["bbox"] is not None:
-        output_image = vehicle_frame.copy()
-        x1, y1, x2, y2 = result["bbox"]
-
-        # Draw bounding box
-        cv2.rectangle(output_image, (x1, y1), (x2, y2), (0, 255, 0), 2)
-
-        # Draw text
-        if result["text"] and result["text"] != "unknown":
-            text = result["text"]
-            # Put text above the box
-            cv2.putText(
-                output_image,
-                text,
-                (x1, y1 - 10),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.7,
-                (0, 255, 0),
-                2,
-            )
-        else:
-            cv2.putText(
-                output_image,
-                "Plate detected",
-                (x1, y1 - 10),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.7,
-                (0, 255, 0),
-                2,
-            )
-
-        # Save output image
-        # output_path = f"test_output_{timestamp_str}.png"
-        # cv2.imwrite(output_path, output_image)
-        # print(f"\n💾 Output image saved: {output_path}")
-
-    print("=" * 60)
-    print("Test completed!")
-    print("=" * 60)
-
+        print(
+            f"  - License plate text: Not recognized (OCR failed or not available)"
+        )
 
 def main():
-    """Main function."""
-    # Get image path from command line or use default
-    if len(sys.argv) > 1:
-        image_path = sys.argv[1]
-    else:
-        # Try to find a vehicle_frame image in screenshots
-        screenshots_dir = Path("screenshots")
-        if screenshots_dir.exists():
-            vehicle_frames = list(screenshots_dir.glob("vehicle_frame_*.png"))
-            if vehicle_frames:
-                image_path = vehicle_frames[0]
-                print(f"ℹ️  No image specified, using: {image_path}")
-            else:
-                print(
-                    "❌ Error: No image specified and no vehicle_frame images found in screenshots/"
-                )
-                print("\nUsage: python test_plate_detection.py [image_path]")
-                return
-        else:
-            print("❌ Error: No image specified and screenshots/ directory not found")
-            print("\nUsage: python test_plate_detection.py [image_path]")
-            return
-
     # Check for GPU flag
     use_gpu = None
     if len(sys.argv) > 2:
@@ -201,6 +128,8 @@ def main():
             use_gpu = True
         elif sys.argv[2].lower() in ["--cpu", "-c", "cpu"]:
             use_gpu = False
+
+    image_path = r"D:\TrucNV\vehicle_detection_tracker\screenshots\20260206\164153_2\vehicle_frame_process_20260206_164153_916.png"
 
     # Run test
     test_plate_detection(image_path, use_gpu=use_gpu)

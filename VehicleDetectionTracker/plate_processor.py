@@ -24,6 +24,11 @@ def reset_telegram_sent():
     _vehicle_telegram_sent_without_plate.clear()
 
 
+def reset_daily_tracking():
+    """Reset daily tracking data (to be called at midnight or start of new day)."""
+    reset_telegram_sent()
+
+
 class PlateProcessor:
     """Handles license plate detection and tracking."""
 
@@ -45,6 +50,7 @@ class PlateProcessor:
         # Persistence settings
         self.state_dir = "vehicle_state"  # Directory to store state files
         self._state_lock = threading.Lock()
+        self._last_reset_date = None  # Track last reset date for daily reset
         
         # Create state directory if it doesn't exist
         os.makedirs(self.state_dir, exist_ok=True)
@@ -510,60 +516,114 @@ class PlateProcessor:
         return os.path.join(self.state_dir, f"vehicle_state_{date_str}.json")
 
     def _load_state(self):
-        """Load vehicle state from persisted JSON file for today."""
+        """Load vehicle state from persisted JSON file for today only."""
         try:
             state_file = self._get_state_file_path()
+            today_str = datetime.now().strftime("%Y%m%d")
+            
             if os.path.exists(state_file):
                 with open(state_file, "r", encoding="utf-8") as f:
                     state = json.load(f)
 
-                # Restore vehicle_last_seen with datetime objects
+                # Restore vehicle_last_seen with datetime objects (TODAY ONLY)
                 if "vehicle_last_seen" in state:
                     for track_id, timestamp_str in state["vehicle_last_seen"].items():
                         try:
                             # Convert string back to datetime
-                            self.vehicle_last_seen[int(track_id)] = (
-                                datetime.fromisoformat(timestamp_str)
-                            )
+                            dt = datetime.fromisoformat(timestamp_str)
+                            # Only load vehicles from today
+                            if dt.strftime("%Y%m%d") == today_str:
+                                self.vehicle_last_seen[int(track_id)] = dt
                         except (ValueError, TypeError):
                             pass
 
-                # Restore vehicle_directions
+                # Get list of valid track_ids from today
+                valid_track_ids = set(self.vehicle_last_seen.keys())
+
+                # Restore vehicle_directions (only for valid track_ids)
                 if "vehicle_directions" in state:
-                    for track_id, direction in state["vehicle_directions"].items():
-                        self.vehicle_directions[int(track_id)] = direction
+                    for track_id_str, direction in state["vehicle_directions"].items():
+                        track_id = int(track_id_str)
+                        if track_id in valid_track_ids:
+                            self.vehicle_directions[track_id] = direction
 
-                # Restore vehicle_plates
+                # Restore vehicle_plates (only for valid track_ids)
                 if "vehicle_plates" in state:
-                    for track_id, plate_text in state["vehicle_plates"].items():
-                        self.vehicle_plates[int(track_id)] = plate_text
+                    for track_id_str, plate_text in state["vehicle_plates"].items():
+                        track_id = int(track_id_str)
+                        if track_id in valid_track_ids:
+                            self.vehicle_plates[track_id] = plate_text
 
-                # Restore vehicle_plate_counts
+                # Restore vehicle_plate_counts (only for valid track_ids)
                 if "vehicle_plate_counts" in state:
-                    for track_id, plate_counts in state["vehicle_plate_counts"].items():
-                        self.vehicle_plate_counts[int(track_id)] = plate_counts
+                    for track_id_str, plate_counts in state["vehicle_plate_counts"].items():
+                        track_id = int(track_id_str)
+                        if track_id in valid_track_ids:
+                            self.vehicle_plate_counts[track_id] = plate_counts
 
                 self.log(
-                    f"[PERSIST] Loaded state: {len(self.vehicle_last_seen)} vehicles, {len(self.vehicle_plates)} plates from {state_file}"
+                    f"[PERSIST] Loaded state: {len(self.vehicle_last_seen)} vehicles from today ({today_str}) from {state_file}"
                 )
         except Exception as e:
             self.log(f"[PERSIST] Failed to load state: {e}")
 
+    def check_and_reset_daily_tracking(self):
+        """Check if it's a new day and reset tracking data if needed."""
+        today_str = datetime.now().strftime("%Y%m%d")
+        
+        # If last reset date is different from today, do daily reset
+        if self._last_reset_date != today_str:
+            self._last_reset_date = today_str
+            self.log(f"[DAILY_RESET] Resetting daily tracking for {today_str}")
+            
+            # Clear session-specific tracking data (but keep persistent data from JSON)
+            self.vehicle_missing_frames.clear()  # Reset missing frame counts
+            reset_daily_tracking()  # Reset telegram notification tracking
+            
+            self.log(f"[DAILY_RESET] ✓ Daily tracking reset completed")
+
     def _save_state(self):
-        """Save vehicle state to JSON file for persistence (one file per day)."""
+        """Save vehicle state to JSON file for persistence (one file per day, today only)."""
         try:
             with self._state_lock:
+                today_str = datetime.now().strftime("%Y%m%d")
                 state_file = self._get_state_file_path()
-                state = {
-                    "vehicle_last_seen": {
-                        str(track_id): (
+                
+                # Filter: only include vehicles from today
+                today_vehicles_last_seen = {}
+                for track_id, ts in self.vehicle_last_seen.items():
+                    if hasattr(ts, "strftime") and ts.strftime("%Y%m%d") == today_str:
+                        today_vehicles_last_seen[str(track_id)] = (
                             ts.isoformat() if hasattr(ts, "isoformat") else str(ts)
                         )
-                        for track_id, ts in self.vehicle_last_seen.items()
-                    },
-                    "vehicle_directions": self.vehicle_directions.copy(),
-                    "vehicle_plates": self.vehicle_plates.copy(),
-                    "vehicle_plate_counts": self.vehicle_plate_counts.copy(),
+                
+                # Get valid track_ids from today
+                valid_track_ids = set(int(tid) for tid in today_vehicles_last_seen.keys())
+                
+                # Filter other dictionaries to only include today's vehicles
+                today_directions = {
+                    str(tid): direction
+                    for tid, direction in self.vehicle_directions.items()
+                    if tid in valid_track_ids
+                }
+                
+                today_plates = {
+                    str(tid): plate
+                    for tid, plate in self.vehicle_plates.items()
+                    if tid in valid_track_ids
+                }
+                
+                today_plate_counts = {
+                    str(tid): counts
+                    for tid, counts in self.vehicle_plate_counts.items()
+                    if tid in valid_track_ids
+                }
+                
+                state = {
+                    "vehicle_last_seen": today_vehicles_last_seen,
+                    "vehicle_directions": today_directions,
+                    "vehicle_plates": today_plates,
+                    "vehicle_plate_counts": today_plate_counts,
                     "timestamp": datetime.now().isoformat(),
                 }
 

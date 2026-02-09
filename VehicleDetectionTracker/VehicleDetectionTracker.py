@@ -78,6 +78,7 @@ class VehicleDetectionTracker:
         excel_output_path = excel_output_path or paths_config.get(
             "excel_output", "vehicle_data.xlsx"
         )
+        plate_model_path = paths_config.get("plate_model", "model/LP_detector.pt")
         initialize_all_models = (
             initialize_all_models
             if initialize_all_models is not None
@@ -89,6 +90,9 @@ class VehicleDetectionTracker:
             self.device, self.use_gpu = ("cuda:0", True) if use_gpu else ("cpu", False)
         else:
             self.device, self.use_gpu = get_device(log)
+
+        # Store paths for later use
+        self.plate_model_path = plate_model_path
 
         # Load YOLO model
         log("Loading YOLO vehicle detection model...")
@@ -142,7 +146,7 @@ class VehicleDetectionTracker:
         try:
             device_str = "cuda:0" if self.use_gpu else "cpu"
             self.plate_model = initialize_plate_detector(
-                "model/LP_detector.pt", device=device_str
+                self.plate_model_path, device=device_str
             )
             self.plate_processor.plate_model = self.plate_model
         except Exception as e:
