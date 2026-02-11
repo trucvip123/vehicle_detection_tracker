@@ -35,53 +35,41 @@ def levenshtein_distance(s1, s2):
 
 
 def merge_similar_plates(plate_summary, log_func=None):
-    """
-    Merge similar license plates (differ by 1-2 characters).
-    Select the plate with highest count as representative.
-    
-    Args:
-        plate_summary: Dict of {plate_text: count}
-        log_func: Optional logging function
-        
-    Returns:
-        Dict: Merged plate summary
-    """
-    MAX_DISTANCE = 3  # Merge plates that differ by up to 2 characters
-    
-    merged = {}
-    processed = set()
-    
-    # Sort plates by count (highest first) for representative selection
-    sorted_plates = sorted(
-        plate_summary.items(), 
-        key=lambda x: -x[1]
-    )
-    
-    for plate_text, count in sorted_plates:
-        if plate_text in processed:
-            continue
-        
-        # Find all similar plates
-        similar_group = {plate_text: count}
-        processed.add(plate_text)
-        
-        for other_plate, other_count in sorted_plates:
-            if other_plate in processed:
-                continue
-            
-            # Check if similar (distance <= MAX_DISTANCE)
-            distance = levenshtein_distance(plate_text, other_plate)
-            if distance <= MAX_DISTANCE and distance > 0:
-                similar_group[other_plate] = other_count
-                processed.add(other_plate)
-        
-        # Use the first (highest count) as representative
-        representative = plate_text
-        total_count = sum(similar_group.values())
-        
-        merged[representative] = total_count
-    
-    return merged
+    THRESHOLD = 2  # Merge plates that differ by up to 2 characters
+    plates = list(plate_summary.keys())
+
+    # union-find
+    parent = {p: p for p in plates}
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a, b):
+        parent[find(b)] = find(a)
+
+    # nối các biển giống nhau
+    for i in range(len(plates)):
+        for j in range(i + 1, len(plates)):
+            if levenshtein_distance(plates[i], plates[j]) <= THRESHOLD:
+                union(plates[i], plates[j])
+
+    # gom nhóm
+    groups = {}
+    for p in plates:
+        root = find(p)
+        groups.setdefault(root, []).append(p)
+
+    # build result
+    result = {}
+    for group in groups.values():
+        represent = max(group, key=lambda p: plate_summary[p])
+        total = sum(plate_summary[p] for p in group)
+        result[represent] = total
+
+    return result
 
 
 def get_today_vehicles_summary(vehicle_last_seen, vehicle_directions, vehicle_plates, log_func=None):

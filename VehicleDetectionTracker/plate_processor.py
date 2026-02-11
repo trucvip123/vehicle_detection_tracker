@@ -159,7 +159,7 @@ class PlateProcessor:
         if len(plate_counts) <= 1:
             return  # No need to merge if only one plate
         
-        MAX_DISTANCE = 2  # Merge plates that differ by up to 2 characters
+        MAX_DISTANCE = 3  # Merge plates that differ by up to 3 characters
         merged = {}
         processed = set()
         
@@ -624,10 +624,18 @@ class PlateProcessor:
                 and "bottom" in self.vehicle_directions.get(tid, "").lower()
             ]
             
+            # self.log(f"[SUMMARY] vehicles_today (entering/bottom): {sorted(vehicles_today)}")
+            # self.log(f"[SUMMARY] vehicle_plates keys: {sorted(self.vehicle_plates.keys())}")
+            # self.log(f"[SUMMARY] vehicle_plate_counts keys: {sorted(self.vehicle_plate_counts.keys())}")
+            
             # Build plate summary using detection counts
             plate_summary = {}
             for track_id in vehicles_today:
                 plate_text = self.vehicle_plates.get(track_id, "?")
+                if plate_text == "?":
+                    self.log(f"[SUMMARY] vehicle_id={track_id} missing from vehicle_plates!")
+                    continue
+                    
                 if plate_text not in plate_summary:
                     plate_summary[plate_text] = 0
                 # Get detection count for this vehicle (default to 1 if not found)
@@ -635,10 +643,16 @@ class PlateProcessor:
                     detection_count = self.vehicle_plate_counts[track_id][plate_text]
                 else:
                     detection_count = 1
+                    
+                # self.log(f"[SUMMARY] vehicle_id={track_id} plate={plate_text} count={detection_count}")
                 plate_summary[plate_text] += detection_count
+            
+            # self.log(f"[SUMMARY] plate_summary before merge: {plate_summary}")
             
             # Merge similar plates (differ by 1-2 characters)
             plate_summary = merge_similar_plates(plate_summary, self.log)
+            
+            # self.log(f"[SUMMARY] plate_summary after merge: {plate_summary}")
             
             # Sort by count (descending)
             sorted_plates = sorted(
@@ -646,9 +660,13 @@ class PlateProcessor:
                 key=lambda x: (-x[1], x[0])
             )
             
+            # self.log(f"[SUMMARY] Final sorted_plates: {sorted_plates}")
+            
             return sorted_plates
         except Exception as e:
             self.log(f"[ERROR] Error getting today's vehicles summary: {e}")
+            import traceback
+            # self.log(f"[ERROR] Traceback: {traceback.format_exc()}")
             return []
 
 
