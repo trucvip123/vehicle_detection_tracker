@@ -303,7 +303,10 @@ class PaddleOCRWrapper:
         province_part = next(
             (t for t in normalized if re.match(r"^\d{2,3}[A-Z]{1,2}$", t.upper())), ""
         )
+
         if province_part:
+            if len(province_part) > 3:
+                return None # Loại bỏ mã tỉnh quá dài
             province_part = (
                 province_part[:2].replace("B", "8").replace("T", "1")
                 + province_part[2:]
@@ -311,6 +314,8 @@ class PaddleOCRWrapper:
         else:
             province_part = ""
         _log_ocr(f"province_part: {province_part}", "ocr")
+
+    
 
         # number_candidates chỉ chứa chuỗi số (không còn chữ), lấy từ normalized, mỗi phần tử là chuỗi số có độ dài 4–5 ký tự.
         number_candidates = [

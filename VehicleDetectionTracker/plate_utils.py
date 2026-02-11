@@ -173,26 +173,27 @@ def detect_license_plate_sync(
     model_lock,
     timestamp_str,
     vehicle_dir="screenshots",
+    track_id=None,
 ):
     """Detect license plate synchronously with detailed logging for debugging (YOLOv8)."""
     try:
-        _log("[PLATE_DETECT] Bắt đầu detect license plate")
+        _log(f"[PLATE_DETECT] vehicle_id={track_id} Bắt đầu detect license plate")
 
         # Check plate model
         if plate_model is None:
-            _log("[PLATE_DETECT] ❌ plate_model is None, return None")
+            _log(f"[PLATE_DETECT] vehicle_id={track_id} ❌ plate_model is None, return None")
             return {"text": None, "count": None}
 
         _log(
-            f"[PLATE_DETECT] Vehicle frame shape: {vehicle_frame.shape if vehicle_frame is not None else 'None'}"
+            f"[PLATE_DETECT] vehicle_id={track_id} Vehicle frame shape: {vehicle_frame.shape if vehicle_frame is not None else 'None'}"
         )
 
         # Run plate detection inference
-        _log("[PLATE_DETECT] Đang chạy plate model inference...")
+        _log(f"[PLATE_DETECT] vehicle_id={track_id} Đang chạy plate model inference...")
         results = _sync_plate_inference(plate_model, vehicle_frame, model_lock)
 
         if results is None:
-            _log("[PLATE_DETECT] ❌ Inference results is None")
+            _log(f"[PLATE_DETECT] vehicle_id={track_id} ❌ Inference results is None")
             return {"text": None, "count": None}
 
         # YOLOv8: Use boxes attribute instead of pred
@@ -200,16 +201,16 @@ def detect_license_plate_sync(
         num_detections = len(boxes) if boxes is not None else 0
         
         if num_detections == 0:
-            _log("[PLATE_DETECT] ❌ Không có detection nào")
+            _log(f"[PLATE_DETECT] vehicle_id={track_id} ❌ Không có detection nào")
             return {"text": None, "count": 0}
 
-        _log(f"[PLATE_DETECT] Raw detections: {num_detections}")
+        _log(f"[PLATE_DETECT] vehicle_id={track_id} Raw detections: {num_detections}")
         
         # Log all detections
         for i, box in enumerate(boxes):
             bbox = box.xyxy[0].tolist()  # [x1, y1, x2, y2]
             conf = float(box.conf[0])
-            _log(f"[PLATE_DETECT] Detection {i}: bbox={bbox}, confidence={conf:.3f}")
+            _log(f"[PLATE_DETECT] vehicle_id={track_id} Detection {i}: bbox={bbox}, confidence={conf:.3f}")
 
         # Get best detection (highest confidence)
         best_box = boxes[0]  # boxes are sorted by confidence by default
@@ -217,14 +218,14 @@ def detect_license_plate_sync(
         x1, y1, x2, y2 = map(int, best_box.xyxy[0].tolist())
 
         _log(
-            f"[PLATE_DETECT] Best detection: bbox=({x1},{y1},{x2},{y2}), confidence={confidence:.3f}"
+            f"[PLATE_DETECT] vehicle_id={track_id} Best detection: bbox=({x1},{y1},{x2},{y2}), confidence={confidence:.3f}"
         )
 
         # Check plate length
         length_plate = x2 - x1
         height_plate = y2 - y1
         _log(
-            f"[PLATE_DETECT] Plate dimensions: width={length_plate}, height={height_plate}"
+            f"[PLATE_DETECT] vehicle_id={track_id} Plate dimensions: width={length_plate}, height={height_plate}"
         )
 
         # Load config for plate detection
@@ -245,19 +246,19 @@ def detect_license_plate_sync(
         # Check confidence threshold
         if confidence < min_confidence:
             _log(
-                f"[PLATE_DETECT] ❌ Confidence quá thấp ({confidence:.3f} < {min_confidence}), return None"
+                f"[PLATE_DETECT] vehicle_id={track_id} ❌ Confidence quá thấp ({confidence:.3f} < {min_confidence}), return None"
             )
             return {"text": None, "count": num_detections}
 
         if length_plate < min_width:
             _log(
-                f"[PLATE_DETECT] ❌ Plate quá nhỏ (width={length_plate} < {min_width}), return None"
+                f"[PLATE_DETECT] vehicle_id={track_id} ❌ Plate quá nhỏ (width={length_plate} < {min_width}), return None"
             )
             return {"text": None, "count": num_detections}
 
         if height_plate < min_height:
             _log(
-                f"[PLATE_DETECT] ❌ Plate quá nhỏ (height={height_plate} < {min_height}), return None"
+                f"[PLATE_DETECT] vehicle_id={track_id} ❌ Plate quá nhỏ (height={height_plate} < {min_height}), return None"
             )
             return {"text": None, "count": num_detections}
 
@@ -271,10 +272,10 @@ def detect_license_plate_sync(
         # Extract plate image
         plate_image = vehicle_frame[y1:y2, x1:x2]
         if plate_image.size == 0:
-            _log("[PLATE_DETECT] ❌ Plate image size = 0, return None")
+            _log(f"[PLATE_DETECT] vehicle_id={track_id} ❌ Plate image size = 0, return None")
             return {"text": None, "count": num_detections}
 
-        _log(f"[PLATE_DETECT] ✓ Extracted plate image shape: {plate_image.shape}")
+        _log(f"[PLATE_DETECT] vehicle_id={track_id} ✓ Extracted plate image shape: {plate_image.shape}")
 
         # Save plate image
         filename = f"{vehicle_dir}/license_frame_{timestamp_str}.png"
@@ -282,11 +283,11 @@ def detect_license_plate_sync(
 
         # Check OCR reader
         if ocr_reader is None:
-            _log("[PLATE_DETECT] ⚠ OCR reader is None, return bbox only")
+            _log(f"[PLATE_DETECT] vehicle_id={track_id} ⚠ OCR reader is None, return bbox only")
             return {"text": None, "count": num_detections}
 
         # Try OCR with different deskew directions
-        _log("[PLATE_DETECT] Bắt đầu OCR với các hướng xoay khác nhau...")
+        _log(f"[PLATE_DETECT] vehicle_id={track_id} Bắt đầu OCR với các hướng xoay khác nhau...")
         lp = "unknown"
         for direction in [-1, 1, 0]:  # left, right, auto
             for center_thres in [0, 1]:
@@ -295,33 +296,33 @@ def detect_license_plate_sync(
                         plate_image, direction, center_thres
                     )
                     _log(
-                        f"[PLATE_DETECT] OCR attempt: direction={direction}, center_thres={center_thres}, deskewed_shape={deskewed_image.shape if deskewed_image is not None else 'None'}"
+                        f"[PLATE_DETECT] vehicle_id={track_id} OCR attempt: direction={direction}, center_thres={center_thres}, deskewed_shape={deskewed_image.shape if deskewed_image is not None else 'None'}"
                     )
 
                     with model_lock:
                         lp = ocr_reader.read_license_plate(deskewed_image)
 
                     _log(
-                        f"[PLATE_DETECT] OCR result (direction={direction}, center_thres={center_thres}): '{lp}'"
+                        f"[PLATE_DETECT] vehicle_id={track_id} OCR result (direction={direction}, center_thres={center_thres}): '{lp}'"
                     )
 
                     if lp != "unknown" and lp is not None:
                         _log(
-                            f"[PLATE_DETECT] ✓ Tìm thấy biển số: '{lp}' (direction={direction}, center_thres={center_thres})"
+                            f"[PLATE_DETECT] vehicle_id={track_id} ✓ Tìm thấy biển số: '{lp}' (direction={direction}, center_thres={center_thres})"
                         )
                         return {"text": lp, "count": num_detections}
                 except Exception as ocr_error:
                     _log(
-                        f"[PLATE_DETECT] ⚠ OCR error (direction={direction}, center_thres={center_thres}): {ocr_error}"
+                        f"[PLATE_DETECT] vehicle_id={track_id} ⚠ OCR error (direction={direction}, center_thres={center_thres}): {ocr_error}"
                     )
 
         _log(
-            f"[PLATE_DETECT] ⚠ Không đọc được biển số sau tất cả các lần thử, return: '{lp}'"
+            f"[PLATE_DETECT] vehicle_id={track_id} ⚠ Không đọc được biển số sau tất cả các lần thử, return: '{lp}'"
         )
         return {"text": lp, "count": num_detections}
     except Exception as e:
-        _log(f"[PLATE_DETECT] ❌ ERROR in license plate detection: {e}")
+        _log(f"[PLATE_DETECT] vehicle_id={track_id} ❌ ERROR in license plate detection: {e}")
         import traceback
 
-        _log(f"[PLATE_DETECT] Traceback: {traceback.format_exc()}")
+        _log(f"[PLATE_DETECT] vehicle_id={track_id} Traceback: {traceback.format_exc()}")
         return {"text": None, "count": None}

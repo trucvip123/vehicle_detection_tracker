@@ -122,13 +122,13 @@ class FrameProcessor:
                         int(x - w / 2) : int(x + w / 2),
                     ]
                     vehicle_frame = frame[
-                        int(y - h / 2 + 300) : int(y + h / 2 + 40),
+                        int(y - h / 2 + 200) : int(y + h / 2 + 40),
                         int(x - w / 2) : int(x + w / 2),
                     ]
                     filename = f"{vehicle_dir}/vehicle_frame_{timestamp_str}.png"
-                    filename_process = f"{vehicle_dir}/vehicle_frame_process_{timestamp_str}.png"
+                    # filename_process = f"{vehicle_dir}/vehicle_frame_process_{timestamp_str}.png"
                     cv2.imwrite(filename, vehicle_frame_save_img)
-                    cv2.imwrite(filename_process, vehicle_frame)
+                    # cv2.imwrite(filename_process, vehicle_frame)
                 except Exception as e:
                     self.log(f"Error saving frame: {e}")
 
@@ -160,6 +160,12 @@ class FrameProcessor:
                     }
                 self.vehicle_timestamps[track_id]["timestamps"].append(frame_timestamp)
                 self.vehicle_timestamps[track_id]["positions"].append((x, y))
+                
+                # Log tracking history
+                num_tracking_points = len(self.vehicle_timestamps[track_id]["positions"])
+                self.log(
+                    f"[TRACK] vehicle_id={track_id} tracking_points={num_tracking_points}, position=({x:.1f},{y:.1f})"
+                )
 
                 # Calculate direction_label
                 timestamps = self.vehicle_timestamps[track_id]["timestamps"]
@@ -171,11 +177,19 @@ class FrameProcessor:
                     final_x, final_y = positions[-1]
                     direction = math.atan2(final_y - initial_y, final_x - initial_x)
                     direction_label = map_direction_to_label(direction)
+                    
+                    # Check if direction changed from previous update
+                    prev_direction = plate_processor.vehicle_directions.get(track_id, "Unknown")
                     self.log(
-                        f"[DEBUG] track_id={track_id} direction={direction:.2f} label={direction_label}"
+                        f"[TRACK] vehicle_id={track_id} direction_calculation: points={len(positions)}, from=({initial_x:.1f},{initial_y:.1f}) to=({final_x:.1f},{final_y:.1f}), angle={direction:.2f}, label={direction_label}, prev={prev_direction}"
                     )
+                    
                     plate_processor.vehicle_directions[track_id] = direction_label
                     plate_processor._save_state()  # Persist state after updating direction
+                else:
+                    self.log(
+                        f"[TRACK] vehicle_id={track_id} insufficient_tracking_points={len(positions)} (need >= 2)"
+                    )
 
                 # Log detected vehicle info
                 self.log(
@@ -183,11 +197,17 @@ class FrameProcessor:
                 )
 
                 if direction_label == "Unknown":
+                    self.log(
+                        f"[TRACK] vehicle_id={track_id} Skipping processing - direction is Unknown"
+                    )
                     continue
 
                 # Process plate in background
                 if vehicle_frame.size > 0:
                     timestamp_str = frame_timestamp.strftime("%Y%m%d_%H%M%S_%f")[:-3]
+                    self.log(
+                        f"[FRAME] Submitting plate processing for vehicle_id={track_id}"
+                    )
                     plate_processor.submit_plate_processing(
                         track_id,
                         vehicle_frame.copy(),
@@ -218,9 +238,17 @@ class FrameProcessor:
         # Step 2: Add newly detected vehicles to temp_vehicle_ids
         new_vehicles = current_track_ids - today_vehicle_ids
         self.temp_vehicle_ids.update(new_vehicles)
+        if new_vehicles:
+            self.log(
+                f"[FRAME] Step 1-2: new_vehicles={new_vehicles}, updated temp_vehicle_ids={sorted(self.temp_vehicle_ids)}"
+            )
         
         # Step 3: Calculate missing vehicles (in temp_vehicle_ids but not in current_track_ids)
         missing_ids = self.temp_vehicle_ids - current_track_ids
+        if missing_ids:
+            self.log(
+                f"[FRAME] Step 3: missing_ids={missing_ids}"
+            )
 
         # Step 4: Increment missing_frames only for vehicles in temp_vehicle_ids (and are entering, not exiting)
         for track_id in missing_ids:
@@ -240,4 +268,34 @@ class FrameProcessor:
                     f"[TRACK] vehicle_id={track_id} Skipping missing_frame count (direction={direction}, vehicle is exiting)"
                 )
 
+        # Step 5: Remove vehicles with missing_frame_count > 1000
+        vehicles_to_remove = [
+            track_id
+            for track_id, count in plate_processor.vehicle_missing_frames.items()
+            if count > 100
+        ]
+        
+        if vehicles_to_remove:
+            self.log(
+                f"[FRAME] Step 5: Removing {len(vehicles_to_remove)} old vehicles: {vehicles_to_remove}"
+            )
+        
+        for track_id in vehicles_to_remove:
+            self.log(
+                f"[FRAME] Removing vehicle_id={track_id} (missing_frame_count={plate_processor.vehicle_missing_frames[track_id]})"
+            )
+            # Remove from all tracking dictionaries
+            plate_processor.vehicle_missing_frames.pop(track_id, None)
+            plate_processor.vehicle_last_seen.pop(track_id, None)
+            plate_processor.vehicle_directions.pop(track_id, None)
+            plate_processor.vehicle_plates.pop(track_id, None)
+            plate_processor.vehicle_plate_counts.pop(track_id, None)
+            self.track_history.pop(track_id, None)
+            self.vehicle_timestamps.pop(track_id, None)
+            self.temp_vehicle_ids.discard(track_id)
+
+        if current_track_ids:
+            self.log(
+                f"[FRAME] Frame processing completed. Active vehicles: {sorted(list(current_track_ids))}"
+            )
         return frame

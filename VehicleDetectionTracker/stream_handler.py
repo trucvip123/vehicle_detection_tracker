@@ -278,10 +278,12 @@ class StreamHandler:
                                     tid, ""
                                 ).lower()
                             ]
-                            vehicle_count = len(vehicles_today)
                             
                             # Get today's vehicles summary from plate_processor
                             vehicle_list = plate_processor.get_today_vehicles_summary()
+                            
+                            # Calculate total vehicle count from detection counts (not just unique vehicles)
+                            vehicle_count = sum(count for _, count in vehicle_list)
 
                             # Draw total count on frame (top-right corner)
                             text_total = f"Total Vehicles: {vehicle_count}"
@@ -353,9 +355,6 @@ class StreamHandler:
                                     2,
                                 )
                                 y_list += 5
-                                
-                                # Calculate total for percentage
-                                total_count = sum(count for _, count in vehicle_list)
                                 
                                 # Draw each vehicle info with details
                                 for idx, (plate, count) in enumerate(vehicle_list[:max_vehicles_display]):

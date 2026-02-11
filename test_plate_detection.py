@@ -129,7 +129,7 @@ def main():
         elif sys.argv[2].lower() in ["--cpu", "-c", "cpu"]:
             use_gpu = False
 
-    image_path = r"D:\TrucNV\vehicle_detection_tracker\screenshots\20260206\164153_2\vehicle_frame_process_20260206_164153_916.png"
+    image_path = r"D:\TrucNV\vehicle_detection_tracker\screenshots\20260210\111356_2\vehicle_frame_20260210_111356_406.png"
 
     # Run test
     test_plate_detection(image_path, use_gpu=use_gpu)

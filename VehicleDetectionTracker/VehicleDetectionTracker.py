@@ -110,6 +110,7 @@ class VehicleDetectionTracker:
         # Thread pool for async operations
         threading_config = get_threading_config()
         max_workers = threading_config.get("max_workers", 4)
+        log(f"Initializing thread pool with max_workers={max_workers}...")
         self._executor = ThreadPoolExecutor(max_workers=max_workers)
 
         # Initialize Excel manager

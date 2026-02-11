@@ -9,6 +9,11 @@ from pathlib import Path
 from VehicleDetectionTracker.plate_utils import detect_license_plate_sync
 from VehicleDetectionTracker.utils.send_bot import send_notify_to_telegram
 from VehicleDetectionTracker.logging_utils import log_plate
+from VehicleDetectionTracker.vehicle_summary import (
+    save_daily_vehicle_summary,
+    levenshtein_distance,
+    merge_similar_plates,
+)
 
 
 # Global sets to track vehicle notifications
@@ -66,64 +71,14 @@ class PlateProcessor:
         """
         from VehicleDetectionTracker.utils.send_bot import send_warning_to_telegram
 
-        if date_str is None:
-            date_str = datetime.now().strftime("%Y%m%d")
-        
-        # Debug log for tracking
-        self.log(f"[DEBUG] vehicle_last_seen: {self.vehicle_last_seen}")
-        self.log(f"[DEBUG] vehicle_directions: {self.vehicle_directions}")
-        for tid, direction in self.vehicle_directions.items():
-            self.log(f"[SUMMARY] vehicle_id={tid} direction={direction}")
-        for tid, ts in self.vehicle_last_seen.items():
-            date_match = (
-                ts.strftime("%Y%m%d") == date_str if hasattr(ts, "strftime") else False
-            )
-            self.log(f"[SUMMARY] vehicle_id={tid} last_seen={ts} today={date_match}")
-        
-        # Only count vehicles with direction_label indicating entry (e.g., 'bottom')
-        vehicles_today = [
-            tid
-            for tid, ts in self.vehicle_last_seen.items()
-            if hasattr(ts, "strftime")
-            and ts.strftime("%Y%m%d") == date_str
-            and "bottom" in self.vehicle_directions.get(tid, "").lower()
-        ]
-        self.log(f"[DEBUG] vehicles_today: {vehicles_today}")
-        
-        try:
-            # Group vehicles by plate number for detailed summary
-            plate_summary = {}
-            for track_id in vehicles_today:
-                plate_text = self.vehicle_plates.get(track_id, "unknown")
-                if plate_text not in plate_summary:
-                    plate_summary[plate_text] = 0
-                plate_summary[plate_text] += 1
-            
-            # Merge similar plates (differ by 1-2 characters)
-            plate_summary = self._merge_similar_plates(plate_summary)
-            
-            # Format date for readable display: YYYYMMDD -> YYYY-MM-DD
-            formatted_date = f"{date_str[0:4]}-{date_str[4:6]}-{date_str[6:8]}"
-            
-            # Build detailed message
-            msg = f"Tổng hợp xe vào ngày {formatted_date}: {len(vehicles_today)} xe vào khu vực mỏ\n"
-            msg += "━" * 40 + "\n"
-            
-            # Sort plates by count (highest first) then alphabetically
-            sorted_plates = sorted(
-                plate_summary.items(), 
-                key=lambda x: (-x[1], x[0])
-            )
-            
-            for plate_text, count in sorted_plates:
-                msg += f"📍 Biển số {plate_text}: {count} xe\n"
-            
-            msg += "━" * 40
-            
-            send_warning_to_telegram(msg)
-            self.log(f"Telegram notification sent for daily summary: {msg}")
-        except Exception as e:
-            self.log(f"Failed to send Telegram summary notification: {e}")
+        save_daily_vehicle_summary(
+            self.vehicle_last_seen,
+            self.vehicle_directions,
+            self.vehicle_plates,
+            self.log,
+            send_warning_to_telegram,
+            date_str,
+        )
 
     def _get_first_vehicle_image(self, vehicle_dir, track_id):
         """
@@ -189,6 +144,60 @@ class PlateProcessor:
         most_detected_plate = max(plate_counts.items(), key=lambda x: x[1])
         return most_detected_plate
 
+    def _merge_similar_plates_for_vehicle(self, track_id):
+        """
+        Merge similar license plates for a vehicle (differ by 1-2 characters).
+        Combine counts and keep the plate with highest count as representative.
+        
+        Args:
+            track_id: Vehicle track ID
+        """
+        if track_id not in self.vehicle_plate_counts:
+            return
+        
+        plate_counts = self.vehicle_plate_counts[track_id]
+        if len(plate_counts) <= 1:
+            return  # No need to merge if only one plate
+        
+        MAX_DISTANCE = 2  # Merge plates that differ by up to 2 characters
+        merged = {}
+        processed = set()
+        
+        # Sort plates by count (highest first) for representative selection
+        sorted_plates = sorted(
+            plate_counts.items(), 
+            key=lambda x: (-x[1], x[0])
+        )
+        
+        for plate_text, count in sorted_plates:
+            if plate_text in processed:
+                continue
+            
+            # Find all similar plates
+            similar_group = {plate_text: count}
+            processed.add(plate_text)
+            
+            for other_plate, other_count in sorted_plates:
+                if other_plate in processed:
+                    continue
+                
+                # Check if similar (distance <= MAX_DISTANCE)
+                dist = levenshtein_distance(plate_text, other_plate)
+                if dist <= MAX_DISTANCE and dist > 0:
+                    similar_group[other_plate] = other_count
+                    processed.add(other_plate)
+            
+            # Use the first (highest count) as representative
+            representative = plate_text
+            total_count = sum(similar_group.values())
+            
+            merged[representative] = total_count
+        
+        # Update vehicle_plate_counts with merged data
+        if merged != plate_counts:
+            self.vehicle_plate_counts[track_id] = merged
+            log_plate(track_id, f"Merged similar plates: {dict(plate_counts)} -> {merged}")
+
     def _sanitize_filename(self, filename):
         """
         Sanitize filename by removing/replacing invalid characters.
@@ -228,6 +237,15 @@ class PlateProcessor:
             timestamp_str: Formatted timestamp string for logging/files
             vehicle_dir: Vehicle directory for saving files
         """
+        # Check if this vehicle_id has already sent notification with plate
+        # If so, skip processing to avoid duplicate notifications
+        global _vehicle_telegram_sent_with_plate, _vehicle_telegram_sent_without_plate, _vehicle_telegram_sent_lock
+        
+        with _vehicle_telegram_sent_lock:
+            if track_id in _vehicle_telegram_sent_with_plate:
+                self.log(f"[PLATE] vehicle_id={track_id} Already sent notification with plate, skipping background processing")
+                return
+        
         self.log(f"[PLATE] vehicle_id={track_id} Processing plate background")
         try:
             # Update last_seen timestamp if available
@@ -249,6 +267,7 @@ class PlateProcessor:
                 self._model_lock,
                 timestamp_str,
                 vehicle_dir=vehicle_dir,
+                track_id=track_id,
             )
             plate_text = license_plate_info.get("text") if license_plate_info else None
             count_detections = license_plate_info.get("count") if license_plate_info else 0
@@ -256,9 +275,6 @@ class PlateProcessor:
             if count_detections is None:
                 count_detections = 0
             log_plate(track_id, f"detected_plate={plate_text}")
-            
-            # Send Telegram notification logic
-            global _vehicle_telegram_sent_with_plate, _vehicle_telegram_sent_without_plate, _vehicle_telegram_sent_lock
             
             # Only send notifications for vehicles entering (not exiting)
             # Skip if direction contains "top" (exit/ra khỏi) or is "Unknown"
@@ -286,14 +302,23 @@ class PlateProcessor:
                             # Check if new plate is significantly different (not just OCR variation)
                             is_different = True
                             for existing_plate in all_existing_plates:
-                                dist = self._levenshtein_distance(plate_text, existing_plate)
+                                dist = levenshtein_distance(plate_text, existing_plate)
                                 if dist <= 2:  # Similar plate (OCR variation)
                                     is_different = False
                                     break
                             
-                            # If completely different plate, track_id was reused
+                            # Check time gap: only consider it a different vehicle if time > 60 seconds
+                            time_gap_exceeded = False
+                            if is_different and track_id in self.vehicle_last_seen:
+                                last_seen_time = self.vehicle_last_seen[track_id]
+                                if frame_timestamp and hasattr(last_seen_time, 'timestamp'):
+                                    time_gap = frame_timestamp.timestamp() - last_seen_time.timestamp()
+                                    time_gap_exceeded = time_gap > 60  # More than 60 seconds
+                                    log_plate(track_id, f"Time gap check: {time_gap:.1f}s (threshold: 60s), gap_exceeded={time_gap_exceeded}")
+                            
+                            # If completely different plate AND time gap > 60s, track_id was reused
                             # Create a versioned ID to keep both vehicles' data separate
-                            if is_different and len(all_existing_plates) > 0:
+                            if is_different and time_gap_exceeded and len(all_existing_plates) > 0:
                                 # Find next version number
                                 version = 2
                                 while f"{track_id}_v{version}" in self.vehicle_plate_counts:
@@ -304,6 +329,13 @@ class PlateProcessor:
                                 log_plate(track_id, f"Keeping old data: {all_existing_plates}")
                                 log_plate(effective_track_id, f"Storing new vehicle data: {plate_text}")
                                 is_first_detection = True  # Treat versioned ID as first detection
+                                
+                                # Update vehicle_last_seen and vehicle_directions with versioned ID
+                                if frame_timestamp:
+                                    self.vehicle_last_seen[effective_track_id] = frame_timestamp
+                                if direction_label:
+                                    self.vehicle_directions[effective_track_id] = direction_label
+                                log_plate(effective_track_id, f"Updated vehicle_last_seen and vehicle_directions with versioned ID")
                         
                         # Increment detection count for this plate
                         if effective_track_id not in self.vehicle_plate_counts:
@@ -311,6 +343,9 @@ class PlateProcessor:
                         self.vehicle_plate_counts[effective_track_id][plate_text] = (
                             self.vehicle_plate_counts[effective_track_id].get(plate_text, 0) + 1
                         )
+                        
+                        # Merge similar plates for this vehicle
+                        self._merge_similar_plates_for_vehicle(effective_track_id)
                         
                         # Select primary plate: highest count, then alphabetically (stable)
                         plate_counts = self.vehicle_plate_counts[effective_track_id]
@@ -406,7 +441,16 @@ class PlateProcessor:
         vehicle_dir,
     ):
         """Submit plate processing to background executor."""
+        # Check if already notified before submitting to avoid unnecessary processing
+        global _vehicle_telegram_sent_with_plate, _vehicle_telegram_sent_lock
+        
+        with _vehicle_telegram_sent_lock:
+            if track_id in _vehicle_telegram_sent_with_plate:
+                self.log(f"[PLATE] vehicle_id={track_id} Already sent notification, skipping submission to executor")
+                return
+        
         if vehicle_frame.size > 0:
+            self.log(f"[PLATE] vehicle_id={track_id} Submitting to background executor")
             self.executor.submit(
                 self.process_plate_background_sync,
                 track_id,
@@ -416,90 +460,6 @@ class PlateProcessor:
                 timestamp_str,
                 vehicle_dir=vehicle_dir,
             )
-
-    def _levenshtein_distance(self, s1, s2):
-        """
-        Calculate the Levenshtein distance between two strings.
-        Used to identify similar license plates (differ by 1-2 characters).
-        
-        Args:
-            s1, s2: Strings to compare
-            
-        Returns:
-            int: Number of character differences
-        """
-        if len(s1) < len(s2):
-            return self._levenshtein_distance(s2, s1)
-        
-        if len(s2) == 0:
-            return len(s1)
-        
-        previous_row = range(len(s2) + 1)
-        for i, c1 in enumerate(s1):
-            current_row = [i + 1]
-            for j, c2 in enumerate(s2):
-                # j+1 instead of j since previous_row and current_row are one character longer
-                insertions = previous_row[j + 1] + 1
-                deletions = current_row[j] + 1
-                substitutions = previous_row[j] + (c1 != c2)
-                current_row.append(min(insertions, deletions, substitutions))
-            previous_row = current_row
-        
-        return previous_row[-1]
-
-    def _merge_similar_plates(self, plate_summary):
-        """
-        Merge similar license plates (differ by 1-2 characters).
-        Select the plate with highest count as representative.
-        
-        Args:
-            plate_summary: Dict of {plate_text: count}
-            
-        Returns:
-            Dict: Merged plate summary
-        """
-        MAX_DISTANCE = 3  # Merge plates that differ by up to 2 characters
-        
-        merged = {}
-        processed = set()
-        
-        # Sort plates by count (highest first) for representative selection
-        sorted_plates = sorted(
-            plate_summary.items(), 
-            key=lambda x: -x[1]
-        )
-        
-        for plate_text, count in sorted_plates:
-            if plate_text in processed:
-                continue
-            
-            # Find all similar plates
-            similar_group = {plate_text: count}
-            processed.add(plate_text)
-            
-            for other_plate, other_count in sorted_plates:
-                if other_plate in processed:
-                    continue
-                
-                # Check if similar (distance <= MAX_DISTANCE)
-                distance = self._levenshtein_distance(plate_text, other_plate)
-                if distance <= MAX_DISTANCE and distance > 0:
-                    similar_group[other_plate] = other_count
-                    processed.add(other_plate)
-            
-            # Use the first (highest count) as representative
-            representative = plate_text
-            total_count = sum(similar_group.values())
-            
-            # # Log if we merged multiple plates
-            # if len(similar_group) > 1:
-            #     self.log(
-            #         f"[MERGE] Merged similar plates: {similar_group} -> Representative: {representative} ({total_count} xe)"
-            #     )
-            
-            merged[representative] = total_count
-        
-        return merged
 
     def _get_state_file_path(self, date_str=None):
         """
@@ -560,6 +520,19 @@ class PlateProcessor:
                         track_id = int(track_id_str)
                         if track_id in valid_track_ids:
                             self.vehicle_plate_counts[track_id] = plate_counts
+
+                # Merge all plate counts into the primary plate (if multiple plates exist)
+                for track_id in valid_track_ids:
+                    if track_id in self.vehicle_plates and track_id in self.vehicle_plate_counts:
+                        primary_plate = self.vehicle_plates[track_id]
+                        plate_counts = self.vehicle_plate_counts[track_id]
+                        
+                        # If multiple plates exist, merge all counts into primary plate
+                        if len(plate_counts) > 1 and primary_plate in plate_counts:
+                            total_count = sum(plate_counts.values())
+                            # Keep only primary plate with total count
+                            self.vehicle_plate_counts[track_id] = {primary_plate: total_count}
+                            log_plate(track_id, f"Merged multiple plates into primary '{primary_plate}': total_count={total_count}")
 
                 self.log(
                     f"[PERSIST] Loaded state: {len(self.vehicle_last_seen)} vehicles from today ({today_str}) from {state_file}"
@@ -651,16 +624,21 @@ class PlateProcessor:
                 and "bottom" in self.vehicle_directions.get(tid, "").lower()
             ]
             
-            # Build plate summary
+            # Build plate summary using detection counts
             plate_summary = {}
             for track_id in vehicles_today:
                 plate_text = self.vehicle_plates.get(track_id, "?")
                 if plate_text not in plate_summary:
                     plate_summary[plate_text] = 0
-                plate_summary[plate_text] += 1
+                # Get detection count for this vehicle (default to 1 if not found)
+                if track_id in self.vehicle_plate_counts and plate_text in self.vehicle_plate_counts[track_id]:
+                    detection_count = self.vehicle_plate_counts[track_id][plate_text]
+                else:
+                    detection_count = 1
+                plate_summary[plate_text] += detection_count
             
             # Merge similar plates (differ by 1-2 characters)
-            plate_summary = self._merge_similar_plates(plate_summary)
+            plate_summary = merge_similar_plates(plate_summary, self.log)
             
             # Sort by count (descending)
             sorted_plates = sorted(
