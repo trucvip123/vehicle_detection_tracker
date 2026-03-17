@@ -128,6 +128,7 @@ def save_daily_vehicle_summary(
     log_func,
     send_telegram_func,
     date_str=None,
+    vehicle_plate_counts=None,
 ):
     """
     Send Telegram notification with summary of vehicles that entered today with license plate details.
@@ -139,9 +140,14 @@ def save_daily_vehicle_summary(
         log_func: Logging function
         send_telegram_func: Function to send Telegram notification
         date_str: Date in YYYYMMDD format. If None, use today.
+        vehicle_plate_counts: Dict of {track_id: {plate_text: count}} for detection counts
     """
     if date_str is None:
         date_str = datetime.now().strftime("%Y%m%d")
+    
+    # Initialize vehicle_plate_counts if not provided
+    if vehicle_plate_counts is None:
+        vehicle_plate_counts = {}
     
     # Debug log for tracking
     log_func(f"[DEBUG] vehicle_last_seen: {vehicle_last_seen}")
@@ -187,7 +193,7 @@ def save_daily_vehicle_summary(
         
         # Build detailed message
         msg = f"Tổng hợp xe vào ngày {formatted_date}: {len(vehicles_today)} xe vào khu vực mỏ\n"
-        msg += "━" * 40 + "\n"
+        msg += "━" * 30 + "\n"
         
         # Sort plates by count (highest first) then alphabetically
         sorted_plates = sorted(
@@ -198,7 +204,7 @@ def save_daily_vehicle_summary(
         for plate_text, count in sorted_plates:
             msg += f"📍 Biển số {plate_text}: {count} xe\n"
         
-        msg += "━" * 40
+        msg += "━" * 30
         
         send_telegram_func(msg)
         log_func(f"Telegram notification sent for daily summary: {msg}")

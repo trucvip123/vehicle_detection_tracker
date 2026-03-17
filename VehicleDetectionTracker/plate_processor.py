@@ -49,6 +49,7 @@ class PlateProcessor:
         self.vehicle_directions = {}  # {track_id: direction_label}
         self.vehicle_last_seen = {}  # {track_id: timestamp}
         self.vehicle_missing_frames = {}  # {track_id: missing_frame_count}
+        self._vehicles_without_plate_logged = set()  # Track which vehicles we've already logged as missing plate
 
         self._model_lock = threading.Lock()
 
@@ -78,6 +79,7 @@ class PlateProcessor:
             self.log,
             send_warning_to_telegram,
             date_str,
+            self.vehicle_plate_counts,
         )
 
     def _get_first_vehicle_image(self, vehicle_dir, track_id):
@@ -277,11 +279,12 @@ class PlateProcessor:
             log_plate(track_id, f"detected_plate={plate_text}")
             
             # Only send notifications for vehicles entering (not exiting)
+            # Must contain "bottom" to be confirmed as entering
             # Skip if direction contains "top" (exit/ra khỏi) or is "Unknown"
-            is_entering = direction_label and "top" not in direction_label.lower()
+            is_entering = direction_label and "bottom" in direction_label.lower()
             
             if not is_entering:
-                log_plate(track_id, f"Skipping notification - vehicle is exiting (direction={direction_label})")
+                log_plate(track_id, f"Skipping notification - vehicle is exiting or direction unknown (direction={direction_label})")
                 return
             
             # Track effective_track_id for use across both cases
@@ -551,6 +554,7 @@ class PlateProcessor:
             
             # Clear session-specific tracking data (but keep persistent data from JSON)
             self.vehicle_missing_frames.clear()  # Reset missing frame counts
+            self._vehicles_without_plate_logged.clear()  # Reset logged vehicles tracking
             reset_daily_tracking()  # Reset telegram notification tracking
             
             self.log(f"[DAILY_RESET] ✓ Daily tracking reset completed")
@@ -633,7 +637,10 @@ class PlateProcessor:
             for track_id in vehicles_today:
                 plate_text = self.vehicle_plates.get(track_id, "?")
                 if plate_text == "?":
-                    self.log(f"[SUMMARY] vehicle_id={track_id} missing from vehicle_plates!")
+                    # Only log once per vehicle to avoid spam in logs
+                    if track_id not in self._vehicles_without_plate_logged:
+                        self.log(f"[SUMMARY] vehicle_id={track_id} missing from vehicle_plates (plate detection not complete yet)")
+                        self._vehicles_without_plate_logged.add(track_id)
                     continue
                     
                 if plate_text not in plate_summary:

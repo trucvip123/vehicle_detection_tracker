@@ -345,7 +345,7 @@ class PaddleOCRWrapper:
             most_common = counts.most_common(1)[0][0]
             if not re.search(r"[A-Za-z]", most_common):
                 return None
-            plate = most_common[:2].replace("B", "8") + most_common[2:]
+            plate = most_common[:2].replace("B", "8").replace("T", "7") + most_common[2:]
         
         if plate[3] == '-':
             split_plate = plate.split('-')

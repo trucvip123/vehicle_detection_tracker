@@ -63,9 +63,12 @@ def send_notify_to_telegram(license_plate, direction, timestamp=None, image_path
     # Format timestamp for easy reading
     if isinstance(timestamp, str):
         dt = datetime.strptime(timestamp, "%Y%m%d_%H%M%S_%f")
-    else:
+    elif isinstance(timestamp, datetime):
         # If it's already a datetime object, use it directly
         dt = timestamp
+    else:
+        # If timestamp is None or invalid, use current time
+        dt = datetime.now()
     formatted_time = dt.strftime("%Y-%m-%d %H:%M:%S")
 
     # Build message and strip leading/trailing whitespace

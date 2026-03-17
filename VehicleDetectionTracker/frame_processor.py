@@ -250,25 +250,25 @@ class FrameProcessor:
                 f"[FRAME] Step 3: missing_ids={missing_ids}"
             )
 
-        # Step 4: Increment missing_frames only for vehicles in temp_vehicle_ids (and are entering, not exiting)
-        for track_id in missing_ids:
-            # Check if vehicle is entering (not exiting)
-            direction = plate_processor.vehicle_directions.get(track_id, "Unknown")
-            # Only count missing frames for entering vehicles (not for exiting/"top" vehicles)
-            if direction and "top" not in direction.lower():
-                if track_id not in plate_processor.vehicle_missing_frames:
-                    plate_processor.vehicle_missing_frames[track_id] = 0
-                plate_processor.vehicle_missing_frames[track_id] += 1
-                self.log(
-                    f"[TRACK] vehicle_id={track_id} missing_frame_count={plate_processor.vehicle_missing_frames[track_id]}"
-                )
-            else:
-                # Skip counting for exiting vehicles
-                self.log(
-                    f"[TRACK] vehicle_id={track_id} Skipping missing_frame count (direction={direction}, vehicle is exiting)"
-                )
+            # Step 4: Increment missing_frames only for vehicles in temp_vehicle_ids (and are entering, not exiting)
+            for track_id in missing_ids:
+                # Check if vehicle is entering (not exiting)
+                direction = plate_processor.vehicle_directions.get(track_id, "Unknown")
+                # Only count missing frames for entering vehicles (not for exiting/"top" vehicles)
+                if direction and "top" not in direction.lower():
+                    if track_id not in plate_processor.vehicle_missing_frames:
+                        plate_processor.vehicle_missing_frames[track_id] = 0
+                    plate_processor.vehicle_missing_frames[track_id] += 1
+                    self.log(
+                        f"[TRACK] vehicle_id={track_id} missing_frame_count={plate_processor.vehicle_missing_frames[track_id]}"
+                    )
+                else:
+                    # Skip counting for exiting vehicles
+                    self.log(
+                        f"[TRACK] vehicle_id={track_id} Skipping missing_frame count (direction={direction}, vehicle is exiting)"
+                    )
 
-        # Step 5: Remove vehicles with missing_frame_count > 1000
+        # Step 5: Remove vehicles with missing_frame_count > 100
         vehicles_to_remove = [
             track_id
             for track_id, count in plate_processor.vehicle_missing_frames.items()
@@ -280,10 +280,55 @@ class FrameProcessor:
                 f"[FRAME] Step 5: Removing {len(vehicles_to_remove)} old vehicles: {vehicles_to_remove}"
             )
         
+        # Import globally used variables for sending notifications
+        from VehicleDetectionTracker.plate_processor import (
+            _vehicle_telegram_sent_with_plate,
+            _vehicle_telegram_sent_without_plate,
+            _vehicle_telegram_sent_lock,
+        )
+        from VehicleDetectionTracker.utils.send_bot import send_notify_to_telegram
+        
         for track_id in vehicles_to_remove:
             self.log(
                 f"[FRAME] Removing vehicle_id={track_id} (missing_frame_count={plate_processor.vehicle_missing_frames[track_id]})"
             )
+            
+            # Send "unknown" notification if vehicle hasn't sent notification yet
+            # and has no plate detected after 100 frames
+            with _vehicle_telegram_sent_lock:
+                if (track_id not in _vehicle_telegram_sent_with_plate and 
+                    track_id not in _vehicle_telegram_sent_without_plate):
+                    
+                    plate_text = plate_processor.vehicle_plates.get(track_id)
+                    
+                    # Only send unknown notification if NO plate was ever detected
+                    if not plate_text:
+                        direction_label = plate_processor.vehicle_directions.get(track_id, "Unknown")
+                        frame_timestamp = plate_processor.vehicle_last_seen.get(track_id)
+                        
+                        # Only send notification for entering vehicles (must contain "bottom")
+                        is_entering = direction_label and "bottom" in direction_label.lower()
+                        
+                        if is_entering:
+                            self.log(
+                                f"[FRAME] vehicle_id={track_id} Sending 'unknown' notification after 100+ frames without plate detection (direction={direction_label})"
+                            )
+                            
+                            try:
+                                send_notify_to_telegram(
+                                    "không xác định",
+                                    direction_label,
+                                    frame_timestamp,
+                                    image_path=None,
+                                )
+                                _vehicle_telegram_sent_without_plate.add(track_id)
+                            except Exception as e:
+                                self.log(f"[FRAME] Error sending unknown notification for vehicle_id={track_id}: {e}")
+                        else:
+                            self.log(
+                                f"[FRAME] vehicle_id={track_id} Skipping unknown notification - vehicle is exiting or direction unknown (direction={direction_label})"
+                            )
+            
             # Remove from all tracking dictionaries
             plate_processor.vehicle_missing_frames.pop(track_id, None)
             plate_processor.vehicle_last_seen.pop(track_id, None)
