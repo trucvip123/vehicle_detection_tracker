@@ -56,17 +56,6 @@ def calculate_speed_and_direction(timestamps, positions):
             delta_t_list.append(delta_t)
             distance_list.append(distance)
 
-    speeds = [
-        distance / delta_t for distance, delta_t in zip(distance_list, delta_t_list)
-    ]
-
-    # Calculate average speed
-    if len(speeds) > 0:
-        avg_speed_mps = sum(speeds) / len(speeds)
-        speed_kph = convert_mps_to_kmph(avg_speed_mps)
-    else:
-        speed_kph = None
-
     # Calculate direction
     initial_x, initial_y = positions[0]
     final_x, final_y = positions[-1]
@@ -82,7 +71,6 @@ def calculate_speed_and_direction(timestamps, positions):
         reliability = 1.0  # High reliability
 
     return {
-        "kph": speed_kph,
         "reliability": reliability,
         "direction_label": direction_label,
         "direction": direction,

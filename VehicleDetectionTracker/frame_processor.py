@@ -2,6 +2,7 @@
 
 import math
 import os
+import glob
 import cv2
 from datetime import datetime
 from collections import defaultdict
@@ -27,6 +28,10 @@ class FrameProcessor:
         )
         # Temporary vehicle IDs for current session (detected but not yet persisted in JSON)
         self.temp_vehicle_ids = set()
+        
+        # Track previous state for debug logging (only log when changed)
+        self._prev_debug_state = {"temp": set(), "today": set(), "current": set()}
+        self._prev_active_vehicle_ids = set()  # Track previous active vehicles to only log when changed
         
         # Load config for detection and tracking
         self.detection_config = get_detection_config()
@@ -100,7 +105,7 @@ class FrameProcessor:
             timestamp_str = frame_timestamp.strftime("%Y%m%d_%H%M%S_%f")[:-3]
             # Add date-based subfolder under screenshots
             date_str = datetime.now().strftime("%Y%m%d")
-            time_str = datetime.now().strftime("%H%M%S")
+            time_str = datetime.now().strftime("%H%M")
 
             for box, track_id, class_id in zip(boxes, track_ids, class_id_list):
                 class_name = coco_class_map.get(class_id, str(class_id))
@@ -132,15 +137,12 @@ class FrameProcessor:
                 except Exception as e:
                     self.log(f"Error saving frame: {e}")
 
-                # Update last seen and reset missing frames
+                # Update last seen
                 plate_processor.vehicle_last_seen[track_id] = frame_timestamp
                 self.log(
                     f"[DEBUG] Updated vehicle_last_seen[{track_id}] = {frame_timestamp}"
                 )
                 plate_processor._save_state()  # Persist state after updating
-
-                # Reset missing frames counter when vehicle is detected
-                plate_processor.vehicle_missing_frames[track_id] = 0
 
                 # Update tracking history
                 if track_id not in self.track_history:
@@ -218,7 +220,7 @@ class FrameProcessor:
                     )
 
         # Update missing frame counts for vehicles not detected
-        # Separate tracking: today_vehicle_ids (from JSON) vs temp_vehicle_ids (current session)
+        # FIXED: Track ALL vehicles (both persisted in JSON and new detections) until they're removed
         today_str = datetime.now().strftime("%Y%m%d")
         today_vehicle_ids = set()
 
@@ -226,121 +228,30 @@ class FrameProcessor:
             if hasattr(ts, "strftime") and ts.strftime("%Y%m%d") == today_str:
                 today_vehicle_ids.add(track_id)
         
-        # print("[DEBUG] today_vehicle_ids (from JSON):", today_vehicle_ids)
-        
-        if self.temp_vehicle_ids:
-            self.log(f"[DEBUG] temp_vehicle_ids (session): {self.temp_vehicle_ids}")
-        # print("[DEBUG] current_track_ids (now):", current_track_ids)
-        
-        # Step 1: Remove vehicles from temp_vehicle_ids if already saved in JSON
-        self.temp_vehicle_ids = self.temp_vehicle_ids - today_vehicle_ids
-        
-        # Step 2: Add newly detected vehicles to temp_vehicle_ids
-        new_vehicles = current_track_ids - today_vehicle_ids
+        # Step 1: Add newly detected vehicles to temp_vehicle_ids (don't remove persisted vehicles!)
+        new_vehicles = current_track_ids - self.temp_vehicle_ids
         self.temp_vehicle_ids.update(new_vehicles)
         if new_vehicles:
             self.log(
-                f"[FRAME] Step 1-2: new_vehicles={new_vehicles}, updated temp_vehicle_ids={sorted(self.temp_vehicle_ids)}"
+                f"[FRAME] Step 1: new_vehicles={new_vehicles}, temp_vehicle_ids={sorted(self.temp_vehicle_ids)}"
             )
         
-        # Step 3: Calculate missing vehicles (in temp_vehicle_ids but not in current_track_ids)
-        missing_ids = self.temp_vehicle_ids - current_track_ids
-        if missing_ids:
-            self.log(
-                f"[FRAME] Step 3: missing_ids={missing_ids}"
-            )
-
-            # Step 4: Increment missing_frames only for vehicles in temp_vehicle_ids (and are entering, not exiting)
-            for track_id in missing_ids:
-                # Check if vehicle is entering (not exiting)
-                direction = plate_processor.vehicle_directions.get(track_id, "Unknown")
-                # Only count missing frames for entering vehicles (not for exiting/"top" vehicles)
-                if direction and "top" not in direction.lower():
-                    if track_id not in plate_processor.vehicle_missing_frames:
-                        plate_processor.vehicle_missing_frames[track_id] = 0
-                    plate_processor.vehicle_missing_frames[track_id] += 1
-                    self.log(
-                        f"[TRACK] vehicle_id={track_id} missing_frame_count={plate_processor.vehicle_missing_frames[track_id]}"
-                    )
-                else:
-                    # Skip counting for exiting vehicles
-                    self.log(
-                        f"[TRACK] vehicle_id={track_id} Skipping missing_frame count (direction={direction}, vehicle is exiting)"
-                    )
-
-        # Step 5: Remove vehicles with missing_frame_count > 100
-        vehicles_to_remove = [
-            track_id
-            for track_id, count in plate_processor.vehicle_missing_frames.items()
-            if count > 100
-        ]
+        # DEBUG: Log vehicle tracking state ONLY when changed
+        current_debug_state = {
+            "temp": self.temp_vehicle_ids.copy(),
+            "today": today_vehicle_ids.copy(),
+            "current": current_track_ids.copy()
+        }
+        if current_debug_state != self._prev_debug_state:
+            self.log(f"[FRAME] STATE CHANGED: temp_vehicle_ids={sorted(self.temp_vehicle_ids)}, today_vehicle_ids={sorted(today_vehicle_ids)}, current_track_ids={sorted(current_track_ids)}")
+            self._prev_debug_state = current_debug_state
         
-        if vehicles_to_remove:
-            self.log(
-                f"[FRAME] Step 5: Removing {len(vehicles_to_remove)} old vehicles: {vehicles_to_remove}"
-            )
+        # Only log when active vehicles change (avoid repeating same logs every frame)
+        if current_track_ids != self._prev_active_vehicle_ids:
+            if current_track_ids:
+                self.log(
+                    f"[FRAME] Frame processing completed. Active vehicles: {sorted(list(current_track_ids))}"
+                )
+            self._prev_active_vehicle_ids = current_track_ids.copy()
         
-        # Import globally used variables for sending notifications
-        from VehicleDetectionTracker.plate_processor import (
-            _vehicle_telegram_sent_with_plate,
-            _vehicle_telegram_sent_without_plate,
-            _vehicle_telegram_sent_lock,
-        )
-        from VehicleDetectionTracker.utils.send_bot import send_notify_to_telegram
-        
-        for track_id in vehicles_to_remove:
-            self.log(
-                f"[FRAME] Removing vehicle_id={track_id} (missing_frame_count={plate_processor.vehicle_missing_frames[track_id]})"
-            )
-            
-            # Send "unknown" notification if vehicle hasn't sent notification yet
-            # and has no plate detected after 100 frames
-            with _vehicle_telegram_sent_lock:
-                if (track_id not in _vehicle_telegram_sent_with_plate and 
-                    track_id not in _vehicle_telegram_sent_without_plate):
-                    
-                    plate_text = plate_processor.vehicle_plates.get(track_id)
-                    
-                    # Only send unknown notification if NO plate was ever detected
-                    if not plate_text:
-                        direction_label = plate_processor.vehicle_directions.get(track_id, "Unknown")
-                        frame_timestamp = plate_processor.vehicle_last_seen.get(track_id)
-                        
-                        # Only send notification for entering vehicles (must contain "bottom")
-                        is_entering = direction_label and "bottom" in direction_label.lower()
-                        
-                        if is_entering:
-                            self.log(
-                                f"[FRAME] vehicle_id={track_id} Sending 'unknown' notification after 100+ frames without plate detection (direction={direction_label})"
-                            )
-                            
-                            try:
-                                send_notify_to_telegram(
-                                    "không xác định",
-                                    direction_label,
-                                    frame_timestamp,
-                                    image_path=None,
-                                )
-                                _vehicle_telegram_sent_without_plate.add(track_id)
-                            except Exception as e:
-                                self.log(f"[FRAME] Error sending unknown notification for vehicle_id={track_id}: {e}")
-                        else:
-                            self.log(
-                                f"[FRAME] vehicle_id={track_id} Skipping unknown notification - vehicle is exiting or direction unknown (direction={direction_label})"
-                            )
-            
-            # Remove from all tracking dictionaries
-            plate_processor.vehicle_missing_frames.pop(track_id, None)
-            plate_processor.vehicle_last_seen.pop(track_id, None)
-            plate_processor.vehicle_directions.pop(track_id, None)
-            plate_processor.vehicle_plates.pop(track_id, None)
-            plate_processor.vehicle_plate_counts.pop(track_id, None)
-            self.track_history.pop(track_id, None)
-            self.vehicle_timestamps.pop(track_id, None)
-            self.temp_vehicle_ids.discard(track_id)
-
-        if current_track_ids:
-            self.log(
-                f"[FRAME] Frame processing completed. Active vehicles: {sorted(list(current_track_ids))}"
-            )
         return frame

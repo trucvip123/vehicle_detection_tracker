@@ -37,84 +37,15 @@ class ConfigLoader:
         if not config_path.exists():
             log(f"⚠ Warning: Config file not found at {config_path}", "config")
             log("⚠ Using default configuration", "config")
-            self._config = self._get_default_config()
             return
 
         try:
             with open(config_path, "r", encoding="utf-8") as f:
                 self._config = yaml.safe_load(f) or {}
 
-            # Merge với default config để đảm bảo có tất cả các keys
-            default_config = self._get_default_config()
-            self._config = self._merge_config(default_config, self._config)
-
         except Exception as e:
             log(f"⚠ Error loading config: {e}", "config")
             log("⚠ Using default configuration", "config")
-            self._config = self._get_default_config()
-
-    def _merge_config(self, default: Dict, user: Dict) -> Dict:
-        """Merge user config với default config"""
-        result = default.copy()
-        for key, value in user.items():
-            if (
-                key in result
-                and isinstance(result[key], dict)
-                and isinstance(value, dict)
-            ):
-                result[key] = self._merge_config(result[key], value)
-            else:
-                result[key] = value
-        return result
-
-    def _get_default_config(self) -> Dict:
-        """Trả về default config nếu không có file"""
-        return {
-            "detection": {
-                "confidence": 0.4,
-                "iou": 0.45,
-                "image_size": 1280,
-                "vehicle_classes": [2, 5, 6, 7, 8],
-            },
-            "tracking": {"tracker_type": "bytetrack.yaml", "max_history_length": 30},
-            "plate_detection": {
-                "image_size": 1280,  # Khuyến nghị: 1280 cho license plate detection
-                "min_confidence": 0.25,
-                "min_width": 40,
-                "min_height": 20,
-            },
-            "ocr": {"confidence_threshold": 0.3, "min_length": 6, "max_length": 15},
-            "rtsp": {
-                "max_reconnect_attempts": 10,
-                "reconnect_delay": 1,
-                "open_timeout_ms": 5000,
-                "read_timeout_ms": 5000,
-                "max_consecutive_failures": 10,
-            },
-            "telegram": {
-                "max_retries": 3,
-                "request_timeout": 15,
-                "retry_delays": [2, 4, 8],
-                "dns_retry_delay": 2,
-            },
-            "threading": {"max_workers": 4},
-            "paths": {
-                "yolo_model": "yolov8n.pt",
-                "plate_model": "model/LP_detector.pt",
-                "screenshots_dir": "screenshots",
-                "excel_output": "vehicle_data.xlsx",
-            },
-            "display": {
-                "show_vehicle_boxes": False,
-                "show_plates_in_corner": True,
-                "stream_frame_size": None,
-            },
-            "advanced": {
-                "initialize_all_models": True,
-                "send_telegram_notification": True,
-                "min_frames_for_plate_detection": 5,
-            },
-        }
 
     def get(self, key_path: str, default: Any = None) -> Any:
         """

@@ -231,8 +231,30 @@ class VehicleDetectionTracker:
         )
 
     def cleanup(self):
-        """Clean up resources."""
+        """Clean up resources and send all pending notifications."""
+        import time
+        
+        # First, wait for all pending background tasks to complete with their callbacks
+        print("[CLEANUP] Waiting for all pending background tasks...")
+        if hasattr(self, "plate_processor") and self.plate_processor:
+            self.plate_processor.wait_all_background_tasks(timeout=60)
+        
+        # Send notifications for all vehicles with completed tasks
+        print("[CLEANUP] Sending notifications for all completed vehicles...")
+        if hasattr(self, "plate_processor") and self.plate_processor:
+            self.plate_processor.send_notifications_for_completed_vehicles()
+        
+        # Give threads a moment to complete after notifications
+        time.sleep(1)
+        
+        # Now shut down the executor
         if hasattr(self, "_executor") and self._executor:
-            self._executor.shutdown(wait=True)
+            print("[CLEANUP] Shutting down thread executor...")
+            self._executor.shutdown(wait=True)  # Wait for remaining tasks to complete
+        
+        # Give daemon threads a moment to complete after executor shutdown
+        time.sleep(1)
+        
         self.plate_processor.vehicle_plates.clear()
         reset_telegram_sent()
+        print("[CLEANUP] ✓ Cleanup complete")
