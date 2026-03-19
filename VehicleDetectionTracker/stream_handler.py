@@ -408,9 +408,11 @@ class StreamHandler:
                         except Exception as e:
                             self.log(f"Loi hien thi bien so xe: {e}")
 
-                    cv2.imshow(
-                        "Vehicle Detection - Streaming Mode", display_frame_resized
-                    )
+                    # Display the frame only if it's valid
+                    if display_frame_resized is not None:
+                        cv2.imshow(
+                            "Vehicle Detection - Streaming Mode", display_frame_resized
+                        )
 
                 if cv2.waitKey(1) & 0xFF == ord("q"):
                     break

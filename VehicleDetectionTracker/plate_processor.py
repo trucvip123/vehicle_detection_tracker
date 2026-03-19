@@ -429,6 +429,13 @@ class PlateProcessor:
                     if effective_track_id not in self.vehicle_plates or not self.vehicle_plates[effective_track_id]:
                         self.vehicle_plates[effective_track_id] = plate_text
                         self.log(f"[PLATE] vehicle_id={effective_track_id} Set primary plate: {plate_text}")
+                        
+                        # Also track in vehicle_plate_counts for summary (1 vehicle = 1 count)
+                        if effective_track_id not in self.vehicle_plate_counts:
+                            self.vehicle_plate_counts[effective_track_id] = {}
+                        if plate_text not in self.vehicle_plate_counts[effective_track_id]:
+                            self.vehicle_plate_counts[effective_track_id][plate_text] = 1
+                            self.log(f"[PLATE] vehicle_id={effective_track_id} Added to plate_counts: {plate_text}")
                     
                     # Save vehicle frame for later use in final notification
                     # Store detected frame with plate info in filename
@@ -808,18 +815,19 @@ class PlateProcessor:
                 # Send final notification with best plate (OUTSIDE of lock)
                 self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} ► Calling Telegram API...")
                 try:
-                    telegram_success = send_notify_to_telegram(
+                    telegram_response = send_notify_to_telegram(
                         plate_text,
                         direction_label,
                         frame_timestamp,
                         image_path=image_path,
                     )
-                    self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} ✓ Telegram API call completed (success={telegram_success})")
+                    self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} ✓ Telegram API call completed (success={telegram_response})")
                 except Exception as e:
                     self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} ✗ Telegram API error: {e}")
-                    telegram_success = False
+                    telegram_response = {"ok": False, "error": str(e)}
                 
-                # Only mark as sent if Telegram API succeeded
+                # Only mark as sent if Telegram API succeeded (check 'ok' field)
+                telegram_success = telegram_response.get("ok", False)
                 if telegram_success:
                     # Now update tracking status inside lock
                     with _vehicle_telegram_sent_lock:
@@ -831,42 +839,6 @@ class PlateProcessor:
                     self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} ⚠ Telegram API failed, will retry later")
                     notification_sent = False
             
-            # # Case 2: No valid plate detected
-            # else:
-            #     # Find first image in vehicle_dir
-            #     image_path = None
-            #     if vehicle_dir:
-            #         image_path = self._get_first_vehicle_image(vehicle_dir, track_id)
-                
-            #     self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} Sending final notification WITHOUT PLATE (no valid plate detected)")
-                
-            #     # Send final notification without plate (OUTSIDE of lock)
-            #     self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} ► Calling Telegram API...")
-            #     if image_path and os.path.exists(image_path):
-            #         send_notify_to_telegram(
-            #             "không xác định",
-            #             direction_label,
-            #             frame_timestamp,
-            #             image_path=image_path,
-            #         )
-            #     else:
-            #         send_notify_to_telegram(
-            #             "không xác định",
-            #             direction_label,
-            #             frame_timestamp,
-            #             image_path=None,
-            #         )
-                
-            #     self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} ✓ Telegram API call completed")
-                
-            #     # Now update tracking status inside lock
-            #     with _vehicle_telegram_sent_lock:
-            #         _vehicle_telegram_sent_without_plate.add(track_id)
-                
-            #     self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} ✓ Final notification sent without plate")
-            #     notification_sent = True
-            
-            # Save state AFTER notification is complete and marked as sent (outside all locks)
             if notification_sent:
                 self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} Saving state (Telegram API was successful)...")
                 self._save_state()
@@ -905,33 +877,15 @@ class PlateProcessor:
                 with open(state_file, "r", encoding="utf-8") as f:
                     state = json.load(f)
 
-                # Restore vehicle_last_seen with datetime objects
-                # No need to filter - file already contains only today's data
-                if "vehicle_last_seen" in state:
-                    for track_id, timestamp_str in state["vehicle_last_seen"].items():
-                        try:
-                            # Convert string back to datetime
-                            dt = datetime.fromisoformat(timestamp_str)
-                            self.vehicle_last_seen[int(track_id)] = dt
-                        except (ValueError, TypeError):
-                            pass
-
-                # Get list of valid track_ids
-                valid_track_ids = set(self.vehicle_last_seen.keys())
-
-                # Restore vehicle_directions
-                if "vehicle_directions" in state:
-                    for track_id_str, direction in state["vehicle_directions"].items():
-                        track_id = int(track_id_str)
-                        if track_id in valid_track_ids:
-                            self.vehicle_directions[track_id] = direction
-
-                # Restore vehicle_plates
+                # Load vehicle_plates (primary data source for valid track_ids)
+                # Note: vehicle_directions and vehicle_last_seen are NOT persisted, only used in-memory during session
+                valid_track_ids = set()
                 if "vehicle_plates" in state:
                     for track_id_str, plate_text in state["vehicle_plates"].items():
                         track_id = int(track_id_str)
-                        if track_id in valid_track_ids:
-                            self.vehicle_plates[track_id] = plate_text
+                        self.vehicle_plates[track_id] = plate_text
+                        valid_track_ids.add(track_id)
+                    self.log(f"[PERSIST] Restored vehicle_plates: {len(valid_track_ids)} vehicles")
 
                 # Restore vehicle_plate_counts
                 if "vehicle_plate_counts" in state:
@@ -939,25 +893,6 @@ class PlateProcessor:
                         track_id = int(track_id_str)
                         if track_id in valid_track_ids:
                             self.vehicle_plate_counts[track_id] = plate_counts
-
-                # Consolidate plate counts to vehicle count format (each vehicle = count of 1)
-                # This handles migration from old format (frame-based counts) to new format (vehicle-based counts)
-                for track_id in valid_track_ids:
-                    if track_id in self.vehicle_plates and track_id in self.vehicle_plate_counts:
-                        primary_plate = self.vehicle_plates[track_id]
-                        plate_counts = self.vehicle_plate_counts[track_id]
-                        
-                        # Always set to 1 per vehicle per plate (normalize from old format if needed)
-                        # Old format: counts represented frame detections
-                        # New format: counts represent 1 vehicle = 1 count
-                        if primary_plate in plate_counts:
-                            old_count = plate_counts[primary_plate]
-                            self.vehicle_plate_counts[track_id] = {primary_plate: 1}
-                            if old_count != 1:
-                                log_plate(track_id, f"Normalized plate count from {old_count} (frame detections) to 1 (vehicle)")
-                        else:
-                            # Ensure primary plate exists with count 1
-                            self.vehicle_plate_counts[track_id] = {primary_plate: 1}
 
                 # Restore notification sent status
                 global _vehicle_telegram_sent_with_plate, _vehicle_telegram_sent_without_plate, _vehicle_telegram_sent_lock
@@ -967,7 +902,7 @@ class PlateProcessor:
                         if track_id in valid_track_ids:
                             with _vehicle_telegram_sent_lock:
                                 _vehicle_telegram_sent_with_plate.add(track_id)
-                                self.log(f"[PERSIST] Restored notification status: vehicle_id={track_id} already sent with plate")
+                                self.log(f"[PERSIST] Restored: vehicle_id={track_id} already sent with plate")
                 
                 if "sent_without_plate" in state:
                     for track_id_str in state["sent_without_plate"]:
@@ -975,10 +910,10 @@ class PlateProcessor:
                         if track_id in valid_track_ids:
                             with _vehicle_telegram_sent_lock:
                                 _vehicle_telegram_sent_without_plate.add(track_id)
-                                self.log(f"[PERSIST] Restored notification status: vehicle_id={track_id} already sent without plate")
+                                self.log(f"[PERSIST] Restored: vehicle_id={track_id} already sent without plate")
 
                 self.log(
-                    f"[PERSIST] Loaded state: {len(self.vehicle_last_seen)} vehicles from {state_file}"
+                    f"[PERSIST] ✓ Loaded state: {len(valid_track_ids)} vehicles from {state_file}"
                 )
         except Exception as e:
             self.log(f"[PERSIST] Failed to load state: {e}")
@@ -1018,21 +953,6 @@ class PlateProcessor:
                 
                 # Convert all data to JSON-serializable format
                 # No need to filter - data already contains only today's vehicles (reset at day start)
-                self.log(f"[PERSIST] _save_state: Converting vehicle_last_seen ({len(self.vehicle_last_seen)} vehicles)...")
-                today_vehicles_last_seen = {}
-                for track_id, ts in self.vehicle_last_seen.items():
-                    today_vehicles_last_seen[str(track_id)] = (
-                        ts.isoformat() if hasattr(ts, "isoformat") else str(ts)
-                    )
-                self.log(f"[PERSIST] _save_state: Converted {len(today_vehicles_last_seen)} vehicles")
-                
-                self.log(f"[PERSIST] _save_state: Converting vehicle_directions...")
-                today_directions = {
-                    str(tid): direction
-                    for tid, direction in self.vehicle_directions.items()
-                }
-                self.log(f"[PERSIST] _save_state: Converted directions: {len(today_directions)}")
-                
                 self.log(f"[PERSIST] _save_state: Converting vehicle_plates...")
                 today_plates = {
                     str(tid): plate
@@ -1062,8 +982,6 @@ class PlateProcessor:
                 
                 self.log(f"[PERSIST] _save_state: Building state dict...")
                 state = {
-                    "vehicle_last_seen": today_vehicles_last_seen,
-                    "vehicle_directions": today_directions,
                     "vehicle_plates": today_plates,
                     "vehicle_plate_counts": today_plate_counts,
                     "sent_with_plate": sent_with_plate_list,

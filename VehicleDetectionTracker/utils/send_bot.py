@@ -100,13 +100,30 @@ def send_notify_to_telegram(license_plate, direction, timestamp=None, image_path
             # If image_path is provided, send photo with caption
             if image_path and os.path.exists(image_path):
                 url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
+                
+                # Validate image file before sending
+                try:
+                    file_size = os.path.getsize(image_path)
+                    if file_size == 0:
+                        log(f"[Telegram] ❌ Image file is empty: {image_path}", "telegram")
+                        return {"ok": False, "error": f"Image file is empty: {image_path}"}
+                    
+                    if file_size > 50 * 1024 * 1024:  # 50MB limit for Telegram
+                        log(f"[Telegram] ❌ Image file too large ({file_size / 1024 / 1024:.1f}MB > 50MB): {image_path}", "telegram")
+                        return {"ok": False, "error": f"Image file too large: {file_size / 1024 / 1024:.1f}MB"}
+                    
+                    log(f"[Telegram] Image file: {os.path.basename(image_path)} ({file_size} bytes)", "telegram")
+                except Exception as e:
+                    log(f"[Telegram] ❌ Error validating image file: {e}", "telegram")
+                    return {"ok": False, "error": f"Image validation error: {str(e)}"}
 
                 with open(image_path, "rb") as photo:
-                    files = {"photo": photo}
+                    # File must be in tuple format with (filename, file_obj, content_type)
+                    files = {"photo": ("plate_screenshot.png", photo, "image/png")}
                     payload = {
                         "chat_id": CHAT_ID,
                         "caption": message,
-                        "parse_mode": "Markdown",
+                        "parse_mode": "HTML",  # Changed to HTML as Markdown can cause issues with some characters
                     }
 
                     # Use increased timeout for better reliability
@@ -134,7 +151,7 @@ def send_notify_to_telegram(license_plate, direction, timestamp=None, image_path
                 payload = {
                     "chat_id": CHAT_ID,
                     "text": message,
-                    "parse_mode": "Markdown",
+                    "parse_mode": "HTML",
                 }
 
                 response = requests.post(url, json=payload, timeout=base_timeout)
@@ -295,7 +312,7 @@ def send_warning_to_telegram(warning_message: str):
 
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-        payload = {"chat_id": CHAT_ID, "text": message, "parse_mode": "Markdown"}
+        payload = {"chat_id": CHAT_ID, "text": message, "parse_mode": "HTML"}
 
         response = requests.post(url, json=payload, timeout=base_timeout)
     except requests.exceptions.Timeout as e:

@@ -24,10 +24,10 @@ def main():
     # Option 1: Process camera/webcam stream (press 'q' to quit)
     print("Starting camera stream... (Press 'q' to quit)")
     RTSP_SOURCE = "rtsp://admin:MOVYKV@aicamera.ddns.net:554/Streaming/Channels/101"
-    VIDEO_SOURCE = r"video\l.mp4"
+    VIDEO_SOURCE = r"video\m.mp4"
 
     tracker.process_video_streaming(
-        RTSP_SOURCE
+        VIDEO_SOURCE
     )  # 0 for webcam, or use RTSP_SOURCE for live stream
 
 
