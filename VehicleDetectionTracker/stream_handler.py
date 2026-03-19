@@ -202,7 +202,7 @@ class StreamHandler:
                 try:
                     success, frame = cap.read()
                     frame_id += 1
-                    if frame_id % 5 != 0:
+                    if frame_id % 3 != 0:
                         continue
                     if frame_id > 100:
                         frame_id = 0

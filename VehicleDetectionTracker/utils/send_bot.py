@@ -9,7 +9,7 @@ load_dotenv()
 
 # Try to load config, fallback to defaults if not available
 try:
-    from VehicleDetectionTracker.config_loader import get_telegram_config
+    from VehicleDetectionTracker.config_loader import get_telegram_config, get_advanced_config
     from VehicleDetectionTracker.logging_utils import log
 
     _use_config = True
@@ -45,6 +45,19 @@ def send_notify_to_telegram(license_plate, direction, timestamp=None, image_path
       3. Or use @RawDataBot to see the chat ID in the message object
       4. Make sure your bot is added to the group and has permission to send messages
     """
+    # Check if notifications are enabled in config
+    if _use_config:
+        try:
+            if not get_advanced_config().get("send_telegram_notification", True):
+                log("[Telegram] Thông báo Telegram bị vô hiệu hóa trong cấu hình", "telegram")
+                return {
+                    "ok": False,
+                    "error": "Notifications disabled in config (send_telegram_notification: false)",
+                }
+        except Exception as e:
+            log(f"[Telegram] Lỗi khi kiểm tra cấu hình: {e}", "telegram")
+            # Continue anyway if config loading fails
+    
     TELEGRAM_BOT_TOKEN = os.getenv(
         "TELEGRAM_BOT_TOKEN",
         "",
@@ -239,6 +252,19 @@ def send_warning_to_telegram(warning_message: str):
       3. Or use @RawDataBot to see the chat ID in the message object
       4. Make sure your bot is added to the group and has permission to send messages
     """
+    # Check if notifications are enabled in config
+    if _use_config:
+        try:
+            if not get_advanced_config().get("send_telegram_notification", True):
+                log("[Telegram] Thông báo Telegram bị vô hiệu hóa trong cấu hình", "telegram")
+                return {
+                    "ok": False,
+                    "error": "Notifications disabled in config (send_telegram_notification: false)",
+                }
+        except Exception as e:
+            log(f"[Telegram] Lỗi khi kiểm tra cấu hình: {e}", "telegram")
+            # Continue anyway if config loading fails
+
     TELEGRAM_BOT_TOKEN = os.getenv(
         "TELEGRAM_BOT_TOKEN",
         "",

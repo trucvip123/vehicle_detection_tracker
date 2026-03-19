@@ -289,7 +289,7 @@ def detect_license_plate_sync(
         # Try OCR with different deskew directions
         _log(f"[PLATE_DETECT] vehicle_id={track_id} Bắt đầu OCR với các hướng xoay khác nhau...")
         lp = "unknown"
-        for direction in [-1, 1, 0]:  # left, right, auto
+        for direction in [-1, 1]:  # left, right
             for center_thres in [0, 1]:
                 try:
                     deskewed_image = utils_rotate.deskew(

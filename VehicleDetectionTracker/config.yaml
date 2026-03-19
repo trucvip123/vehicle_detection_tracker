@@ -177,7 +177,7 @@ advanced:
   initialize_all_models: true
   
   # Gửi thông báo Telegram cho mỗi phương tiện (True) hay chỉ một lần (False)
-  send_telegram_notification: false
+  send_telegram_notification: true
   
   # Số lượng frame tối thiểu trước khi xử lý plate detection
   min_frames_for_plate_detection: 5

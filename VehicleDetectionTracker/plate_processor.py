@@ -47,7 +47,7 @@ class PlateProcessor:
         # Track detected plates per vehicle
         self.vehicle_plates = {}  # {track_id: plate_text}
         self.vehicle_plate_counts = {}  # {track_id: {plate_text: count}} # Count of distinct vehicles with each plate (for summary, not frame count)
-        self.vehicle_plate_counts_each_frame = {}  # {track_id: {plate_text: frame_count}} # Count of frames with each plate (for debugging)
+        self.vehicle_plate_counts_each_frame = {}  # {track_id: {plate_text: detection_count}} # Count of how many times each plate is detected (incremented on each detection)
         self.vehicle_directions = {}  # {track_id: direction_label}
         self.vehicle_last_seen = {}  # {track_id: timestamp}
         self._vehicles_without_plate_logged = set()  # Track which vehicles we've already logged as missing plate
@@ -117,15 +117,25 @@ class PlateProcessor:
             
             if detected_plate_images:
                 # Sort by number in filename (e.g., detected_plate_05_77C-166.34.png)
-                # Pick the latest (highest number) one
+                # Pick the one with highest detection count
                 detected_plate_images.sort(
                     key=lambda x: int(x.split('_')[2]) if len(x.split('_')) > 2 and x.split('_')[2].isdigit() else 0,
                     reverse=True
                 )
-                best_detected = detected_plate_images[0]
+                
+                # Prefer high-confidence images with detection count >= 2
+                # Multiple detections confirm the plate accuracy, avoid single-detection OCR errors
+                high_confidence_images = [
+                    img for img in detected_plate_images
+                    if int(img.split('_')[2]) >= 2
+                ]
+                
+                best_detected = high_confidence_images[0] if high_confidence_images else detected_plate_images[0]
                 image_path = os.path.join(vehicle_dir, best_detected)
                 if os.path.exists(image_path) and os.path.getsize(image_path) > 0:
-                    self.log(f"[IMAGE_SELECT] vehicle_id={track_id} Using detected plate image: {best_detected}")
+                    detection_count = int(best_detected.split('_')[2]) if len(best_detected.split('_')) > 2 and best_detected.split('_')[2].isdigit() else 0
+                    confidence = "HIGH (count >= 2)" if detection_count >= 2 else "LOW (single detection)"
+                    self.log(f"[IMAGE_SELECT] vehicle_id={track_id} Using detected plate image: {best_detected} [{confidence}]")
                     return image_path
             
             # Strategy 2: Try to find image with matching plate name
@@ -395,15 +405,16 @@ class PlateProcessor:
                                 self.vehicle_directions[effective_track_id] = direction_label
                             log_plate(effective_track_id, f"Updated vehicle_last_seen and vehicle_directions with versioned ID")
                     
-                    # Track this vehicle-plate pair (count = 1 vehicle, not frame count)
-                    # vehicle_plate_counts represents: how many distinct vehicles have each plate
+                    # Track this vehicle-plate pair with detection count
+                    # vehicle_plate_counts_each_frame represents: how many times this plate was detected for this vehicle
                     if effective_track_id not in self.vehicle_plate_counts_each_frame:
                         self.vehicle_plate_counts_each_frame[effective_track_id] = {}
                     
-                    # Set to 1 if not already set (vehicle count, not frame count)
-                    # Each vehicle-plate pair only counts as 1 vehicle with that plate
+                    # Initialize to 0 if not already set, then increment
+                    # Each detection increments the count by 1
                     if plate_text not in self.vehicle_plate_counts_each_frame[effective_track_id]:
-                        self.vehicle_plate_counts_each_frame[effective_track_id][plate_text] = 1
+                        self.vehicle_plate_counts_each_frame[effective_track_id][plate_text] = 0
+                    self.vehicle_plate_counts_each_frame[effective_track_id][plate_text] += 1
                     
                     # NOTE: Do NOT use vehicle_plate_counts for intermediate decisions
                     # vehicle_plate_counts is only for end-of-day summary
@@ -508,7 +519,7 @@ class PlateProcessor:
                     
                     self.log(f"[TASK_COMPLETE] vehicle_id={track_id} Background task completed. Remaining tasks: {remaining_tasks}")
                     
-                    # If all tasks for this vehicle are done, save state with all detections completed
+                    # If all tasks for this vehicle are done
                     if remaining_tasks == 0:
                         self.log(f"[TASK_COMPLETE] vehicle_id={track_id} ✓ All background tasks completed")
                         
@@ -516,9 +527,7 @@ class PlateProcessor:
                         current_best_plate = self.get_most_detected_plate(track_id)[0]
                         self.log(f"[TASK_COMPLETE] vehicle_id={track_id} Best plate: {current_best_plate}")
                         
-                        # Save state after all tasks complete with final plate data
-                        self._save_state()
-                        
+                        # Note: State will be saved only after Telegram API succeeds
                         self.log(f"[TASK_COMPLETE] vehicle_id={track_id} ✓ All detection tasks done, ready to send notification now")
             
             # Send notification OUTSIDE the lock to avoid blocking other operations
@@ -798,20 +807,29 @@ class PlateProcessor:
                 
                 # Send final notification with best plate (OUTSIDE of lock)
                 self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} ► Calling Telegram API...")
-                send_notify_to_telegram(
-                    plate_text,
-                    direction_label,
-                    frame_timestamp,
-                    image_path=image_path,
-                )
-                self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} ✓ Telegram API call completed")
+                try:
+                    telegram_success = send_notify_to_telegram(
+                        plate_text,
+                        direction_label,
+                        frame_timestamp,
+                        image_path=image_path,
+                    )
+                    self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} ✓ Telegram API call completed (success={telegram_success})")
+                except Exception as e:
+                    self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} ✗ Telegram API error: {e}")
+                    telegram_success = False
                 
-                # Now update tracking status inside lock
-                with _vehicle_telegram_sent_lock:
-                    _vehicle_telegram_sent_with_plate.add(track_id)
-                
-                self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} ✓ Final notification sent with plate={plate_text}")
-                notification_sent = True
+                # Only mark as sent if Telegram API succeeded
+                if telegram_success:
+                    # Now update tracking status inside lock
+                    with _vehicle_telegram_sent_lock:
+                        _vehicle_telegram_sent_with_plate.add(track_id)
+                    
+                    self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} ✓ Final notification sent with plate={plate_text}")
+                    notification_sent = True
+                else:
+                    self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} ⚠ Telegram API failed, will retry later")
+                    notification_sent = False
             
             # # Case 2: No valid plate detected
             # else:
@@ -850,7 +868,7 @@ class PlateProcessor:
             
             # Save state AFTER notification is complete and marked as sent (outside all locks)
             if notification_sent:
-                self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} Saving state...")
+                self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} Saving state (Telegram API was successful)...")
                 self._save_state()
                 self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} ✓ State saved")
                 return True
@@ -887,36 +905,35 @@ class PlateProcessor:
                 with open(state_file, "r", encoding="utf-8") as f:
                     state = json.load(f)
 
-                # Restore vehicle_last_seen with datetime objects (TODAY ONLY)
+                # Restore vehicle_last_seen with datetime objects
+                # No need to filter - file already contains only today's data
                 if "vehicle_last_seen" in state:
                     for track_id, timestamp_str in state["vehicle_last_seen"].items():
                         try:
                             # Convert string back to datetime
                             dt = datetime.fromisoformat(timestamp_str)
-                            # Only load vehicles from today
-                            if dt.strftime("%Y%m%d") == today_str:
-                                self.vehicle_last_seen[int(track_id)] = dt
+                            self.vehicle_last_seen[int(track_id)] = dt
                         except (ValueError, TypeError):
                             pass
 
-                # Get list of valid track_ids from today
+                # Get list of valid track_ids
                 valid_track_ids = set(self.vehicle_last_seen.keys())
 
-                # Restore vehicle_directions (only for valid track_ids)
+                # Restore vehicle_directions
                 if "vehicle_directions" in state:
                     for track_id_str, direction in state["vehicle_directions"].items():
                         track_id = int(track_id_str)
                         if track_id in valid_track_ids:
                             self.vehicle_directions[track_id] = direction
 
-                # Restore vehicle_plates (only for valid track_ids)
+                # Restore vehicle_plates
                 if "vehicle_plates" in state:
                     for track_id_str, plate_text in state["vehicle_plates"].items():
                         track_id = int(track_id_str)
                         if track_id in valid_track_ids:
                             self.vehicle_plates[track_id] = plate_text
 
-                # Restore vehicle_plate_counts (only for valid track_ids)
+                # Restore vehicle_plate_counts
                 if "vehicle_plate_counts" in state:
                     for track_id_str, plate_counts in state["vehicle_plate_counts"].items():
                         track_id = int(track_id_str)
@@ -942,7 +959,7 @@ class PlateProcessor:
                             # Ensure primary plate exists with count 1
                             self.vehicle_plate_counts[track_id] = {primary_plate: 1}
 
-                # Restore notification sent status (only for valid track_ids from today)
+                # Restore notification sent status
                 global _vehicle_telegram_sent_with_plate, _vehicle_telegram_sent_without_plate, _vehicle_telegram_sent_lock
                 if "sent_with_plate" in state:
                     for track_id_str in state["sent_with_plate"]:
@@ -961,7 +978,7 @@ class PlateProcessor:
                                 self.log(f"[PERSIST] Restored notification status: vehicle_id={track_id} already sent without plate")
 
                 self.log(
-                    f"[PERSIST] Loaded state: {len(self.vehicle_last_seen)} vehicles from today ({today_str}) from {state_file}"
+                    f"[PERSIST] Loaded state: {len(self.vehicle_last_seen)} vehicles from {state_file}"
                 )
         except Exception as e:
             self.log(f"[PERSIST] Failed to load state: {e}")
@@ -975,60 +992,60 @@ class PlateProcessor:
             self._last_reset_date = today_str
             self.log(f"[DAILY_RESET] Resetting daily tracking for {today_str}")
             
-            # Clear session-specific tracking data (but keep persistent data from JSON)
-            self._vehicles_without_plate_logged.clear()  # Reset logged vehicles tracking
+            # Clear all daily tracking data (fresh start for new day)
+            self.vehicle_plates.clear()
+            self.vehicle_plate_counts.clear()
+            self.vehicle_plate_counts_each_frame.clear()
+            self.vehicle_directions.clear()
+            self.vehicle_last_seen.clear()
+            self.vehicle_detected_plate_images.clear()
+            self.vehicle_pending_futures.clear()
+            self.vehicle_pending_task_count.clear()
+            self._vehicles_without_plate_logged.clear()
+            
             reset_daily_tracking()  # Reset telegram notification tracking
             
-            self.log(f"[DAILY_RESET] ✓ Daily tracking reset completed")
+            self.log(f"[DAILY_RESET] ✓ All daily tracking data reset for new day")
 
     def _save_state(self):
-        """Save vehicle state to JSON file for persistence (one file per day, today only)."""
+        """Save vehicle state to JSON file for persistence (one file per day)."""
         try:
             self.log(f"[PERSIST] _save_state: Attempting to acquire lock...")
             with self._state_lock:
                 self.log(f"[PERSIST] _save_state: Lock acquired")
-                today_str = datetime.now().strftime("%Y%m%d")
                 state_file = self._get_state_file_path()
-                self.log(f"[PERSIST] _save_state: state_file={state_file}, today={today_str}")
+                self.log(f"[PERSIST] _save_state: state_file={state_file}")
                 
-                # Filter: only include vehicles from today
-                self.log(f"[PERSIST] _save_state: Filtering vehicle_last_seen ({len(self.vehicle_last_seen)} vehicles)...")
+                # Convert all data to JSON-serializable format
+                # No need to filter - data already contains only today's vehicles (reset at day start)
+                self.log(f"[PERSIST] _save_state: Converting vehicle_last_seen ({len(self.vehicle_last_seen)} vehicles)...")
                 today_vehicles_last_seen = {}
                 for track_id, ts in self.vehicle_last_seen.items():
-                    if hasattr(ts, "strftime") and ts.strftime("%Y%m%d") == today_str:
-                        today_vehicles_last_seen[str(track_id)] = (
-                            ts.isoformat() if hasattr(ts, "isoformat") else str(ts)
-                        )
-                self.log(f"[PERSIST] _save_state: Filtered to {len(today_vehicles_last_seen)} vehicles from today")
+                    today_vehicles_last_seen[str(track_id)] = (
+                        ts.isoformat() if hasattr(ts, "isoformat") else str(ts)
+                    )
+                self.log(f"[PERSIST] _save_state: Converted {len(today_vehicles_last_seen)} vehicles")
                 
-                # Get valid track_ids from today
-                valid_track_ids = set(int(tid) for tid in today_vehicles_last_seen.keys())
-                self.log(f"[PERSIST] _save_state: valid_track_ids={valid_track_ids}")
-                
-                # Filter other dictionaries to only include today's vehicles
-                self.log(f"[PERSIST] _save_state: Filtering vehicle_directions...")
+                self.log(f"[PERSIST] _save_state: Converting vehicle_directions...")
                 today_directions = {
                     str(tid): direction
                     for tid, direction in self.vehicle_directions.items()
-                    if tid in valid_track_ids
                 }
-                self.log(f"[PERSIST] _save_state: Filtered directions: {len(today_directions)}")
+                self.log(f"[PERSIST] _save_state: Converted directions: {len(today_directions)}")
                 
-                self.log(f"[PERSIST] _save_state: Filtering vehicle_plates...")
+                self.log(f"[PERSIST] _save_state: Converting vehicle_plates...")
                 today_plates = {
                     str(tid): plate
                     for tid, plate in self.vehicle_plates.items()
-                    if tid in valid_track_ids
                 }
-                self.log(f"[PERSIST] _save_state: Filtered plates: {len(today_plates)}")
+                self.log(f"[PERSIST] _save_state: Converted plates: {len(today_plates)}")
                 
-                self.log(f"[PERSIST] _save_state: Filtering vehicle_plate_counts...")
+                self.log(f"[PERSIST] _save_state: Converting vehicle_plate_counts...")
                 today_plate_counts = {
                     str(tid): counts
                     for tid, counts in self.vehicle_plate_counts.items()
-                    if tid in valid_track_ids
                 }
-                self.log(f"[PERSIST] _save_state: Filtered plate_counts: {len(today_plate_counts)}")
+                self.log(f"[PERSIST] _save_state: Converted plate_counts: {len(today_plate_counts)}")
                 
                 # Persist notification sent status
                 self.log(f"[PERSIST] _save_state: Processing telegram sent status...")
@@ -1038,11 +1055,9 @@ class PlateProcessor:
                 with _vehicle_telegram_sent_lock:
                     self.log(f"[PERSIST] _save_state: Telegram lock acquired")
                     for track_id in _vehicle_telegram_sent_with_plate:
-                        if track_id in valid_track_ids:
-                            sent_with_plate_list.append(str(track_id))
+                        sent_with_plate_list.append(str(track_id))
                     for track_id in _vehicle_telegram_sent_without_plate:
-                        if track_id in valid_track_ids:
-                            sent_without_plate_list.append(str(track_id))
+                        sent_without_plate_list.append(str(track_id))
                     self.log(f"[PERSIST] _save_state: Telegram lock released")
                 
                 self.log(f"[PERSIST] _save_state: Building state dict...")
@@ -1071,19 +1086,17 @@ class PlateProcessor:
         """
         Get summary of vehicles (plates and counts) from today's tracking data.
         
+        Note: All data in memory is from today only (reset at day start).
         Returns:
             list: List of tuples (plate_text, count) sorted by count (descending)
         """
         try:
-            today_str = datetime.now().strftime("%Y%m%d")
-            
-            # Get vehicles that entered today (direction contains "bottom")
+            # Get vehicles that entered (direction contains "bottom")
+            # No need to filter by date - all data is from today
             vehicles_today = [
                 tid
-                for tid, ts in self.vehicle_last_seen.items()
-                if hasattr(ts, "strftime")
-                and ts.strftime("%Y%m%d") == today_str
-                and "bottom" in self.vehicle_directions.get(tid, "").lower()
+                for tid in self.vehicle_last_seen.keys()
+                if "bottom" in self.vehicle_directions.get(tid, "").lower()
             ]
             
             # self.log(f"[SUMMARY] vehicles_today (entering/bottom): {sorted(vehicles_today)}")

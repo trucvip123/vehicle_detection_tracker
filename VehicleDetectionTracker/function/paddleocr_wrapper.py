@@ -347,7 +347,7 @@ class PaddleOCRWrapper:
                 return None
             plate = most_common[:2].replace("B", "8").replace("T", "7") + most_common[2:]
         
-        if plate[3] == '-':
+        if len(plate) > 3 and plate[3] == '-':
             split_plate = plate.split('-')
             number_part = split_plate[1] if len(split_plate) > 1 else ''
 
