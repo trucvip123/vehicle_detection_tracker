@@ -233,28 +233,55 @@ class VehicleDetectionTracker:
     def cleanup(self):
         """Clean up resources and send all pending notifications."""
         import time
+        import sys
+        from VehicleDetectionTracker.plate_utils import get_inference_queue
+        
+        print("[CLEANUP] ⏳ Starting cleanup sequence...", flush=True)
+        sys.stdout.flush()
         
         # First, wait for all pending background tasks to complete with their callbacks
-        print("[CLEANUP] Waiting for all pending background tasks...")
+        print("[CLEANUP] ⏳ Step 1: Waiting for all pending background tasks...", flush=True)
+        sys.stdout.flush()
         if hasattr(self, "plate_processor") and self.plate_processor:
-            self.plate_processor.wait_all_background_tasks(timeout=60)
+            result = self.plate_processor.wait_all_background_tasks(timeout=60)
+            print(f"[CLEANUP] ✓ Background tasks wait returned: {result}", flush=True)
         
         # Send notifications for all vehicles with completed tasks
-        print("[CLEANUP] Sending notifications for all completed vehicles...")
+        print("[CLEANUP] ⏳ Step 2: Sending notifications for all completed vehicles...", flush=True)
+        sys.stdout.flush()
         if hasattr(self, "plate_processor") and self.plate_processor:
             self.plate_processor.send_notifications_for_completed_vehicles()
         
-        # Give threads a moment to complete after notifications
-        time.sleep(1)
+        # Shutdown the inference queue gracefully
+        # This waits for all queued tasks + signals workers to exit (they're daemon threads)
+        print("[CLEANUP] ⏳ Step 3: Shutting down inference queue gracefully...", flush=True)
+        sys.stdout.flush()
+        try:
+            queue_instance = get_inference_queue()
+            if queue_instance:
+                queue_instance.shutdown()
+                print("[CLEANUP] ✓ Inference queue shutdown complete (workers will exit as daemon threads)", flush=True)
+        except Exception as e:
+            print(f"[CLEANUP] ⚠ Error shutting down inference queue: {e}", flush=True)
+        
+        # Give threads a moment to complete
+        print("[CLEANUP] ⏳ Step 4: Giving threads time to complete...", flush=True)
+        sys.stdout.flush()
+        time.sleep(0.5)
         
         # Now shut down the executor
+        print("[CLEANUP] ⏳ Step 5: Shutting down thread executor...", flush=True)
+        sys.stdout.flush()
         if hasattr(self, "_executor") and self._executor:
-            print("[CLEANUP] Shutting down thread executor...")
-            self._executor.shutdown(wait=True)  # Wait for remaining tasks to complete
+            self._executor.shutdown(wait=True)  # Wait for remaining tasks
+            print("[CLEANUP] ✓ Executor shutdown complete", flush=True)
         
-        # Give daemon threads a moment to complete after executor shutdown
-        time.sleep(1)
+        sys.stdout.flush()
         
-        self.plate_processor.vehicle_plates.clear()
+        # Clean up state
+        if hasattr(self, "plate_processor") and self.plate_processor:
+            self.plate_processor.vehicle_plates.clear()
+        
         reset_telegram_sent()
-        print("[CLEANUP] ✓ Cleanup complete")
+        print("[CLEANUP] ✓✓ CLEANUP COMPLETE - Now exiting...", flush=True)
+        sys.stdout.flush()

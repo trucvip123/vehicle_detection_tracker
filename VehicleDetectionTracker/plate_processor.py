@@ -7,7 +7,11 @@ import json
 import os
 from pathlib import Path
 from concurrent.futures import wait, ALL_COMPLETED
-from VehicleDetectionTracker.plate_utils import detect_license_plate_sync
+from VehicleDetectionTracker.plate_utils import (
+    detect_license_plate_sync,
+    submit_plate_detection_async,
+    initialize_inference_queue,
+)
 from VehicleDetectionTracker.utils.send_bot import send_notify_to_telegram
 from VehicleDetectionTracker.logging_utils import log_plate
 from VehicleDetectionTracker.vehicle_summary import (
@@ -55,6 +59,9 @@ class PlateProcessor:
         self.vehicle_detected_plate_images = {}  # {track_id: path_to_image_with_detected_plate}
         self.vehicle_pending_task_count = {}  # {track_id: count of pending background tasks}
         self._task_count_lock = threading.Lock()  # Lock for task count updates
+        
+        # Track pending inference queue tasks separately (for async queue detection)
+        self.vehicle_pending_queue_tasks = {}  # {track_id: count of pending queue tasks}
 
         self._model_lock = threading.Lock()
 
@@ -65,6 +72,10 @@ class PlateProcessor:
         
         # Create state directory if it doesn't exist
         os.makedirs(self.state_dir, exist_ok=True)
+
+        # Initialize inference queue for async plate detection (reduces model_lock contention)
+        initialize_inference_queue(num_workers=5)
+        self.log("[PLATE_PROCESSOR] ✓ Initialized inference queue with 2 worker threads")
 
         # Load persisted state if it exists
         self._load_state()
@@ -105,17 +116,23 @@ class PlateProcessor:
         """
         try:
             if not os.path.exists(vehicle_dir):
-                self.log(f"[IMAGE_SELECT] vehicle_id={track_id} directory not found: {vehicle_dir}")
+                self.log(f"[IMAGE_SELECT] vehicle_id={track_id} ❌ directory NOT FOUND: {vehicle_dir}")
                 return None
+            
+            # List all files in the directory for debugging
+            all_files = os.listdir(vehicle_dir)
+            png_files = [f for f in all_files if f.endswith('.png')]
+            self.log(f"[IMAGE_SELECT] vehicle_id={track_id} Found {len(png_files)} PNG files in {vehicle_dir}: {png_files[:10]}")  # Show first 10
             
             # Strategy 1: Try to find detected_plate_XX.png (highest priority - actual detected image)
             # These files have the plate info in their name
             detected_plate_images = [
-                f for f in os.listdir(vehicle_dir)
+                f for f in all_files
                 if f.startswith('detected_plate_') and f.endswith('.png')
             ]
             
             if detected_plate_images:
+                self.log(f"[IMAGE_SELECT] vehicle_id={track_id} Found {len(detected_plate_images)} detected_plate images: {detected_plate_images}")
                 # Sort by number in filename (e.g., detected_plate_05_77C-166.34.png)
                 # Pick the one with highest detection count
                 detected_plate_images.sort(
@@ -135,21 +152,31 @@ class PlateProcessor:
                 if os.path.exists(image_path) and os.path.getsize(image_path) > 0:
                     detection_count = int(best_detected.split('_')[2]) if len(best_detected.split('_')) > 2 and best_detected.split('_')[2].isdigit() else 0
                     confidence = "HIGH (count >= 2)" if detection_count >= 2 else "LOW (single detection)"
-                    self.log(f"[IMAGE_SELECT] vehicle_id={track_id} Using detected plate image: {best_detected} [{confidence}]")
+                    file_size = os.path.getsize(image_path)
+                    self.log(f"[IMAGE_SELECT] vehicle_id={track_id} ✓ Selected detected_plate: {best_detected} (size={file_size}, {confidence})")
                     return image_path
+                else:
+                    self.log(f"[IMAGE_SELECT] vehicle_id={track_id} ⚠ Detected_plate file empty or not readable: {image_path}")
+            else:
+                self.log(f"[IMAGE_SELECT] vehicle_id={track_id} ℹ No detected_plate_XX images found (looking for pattern: detected_plate_*.png)")
             
             # Strategy 2: Try to find image with matching plate name
             sanitized_plate = self._sanitize_filename(plate_text)
             target_filename = f"vehicle_{sanitized_plate}.png"
-            
             target_path = os.path.join(vehicle_dir, target_filename)
+            
+            self.log(f"[IMAGE_SELECT] vehicle_id={track_id} Strategy 2: Looking for plate-matching image: {target_filename}")
             if os.path.exists(target_path) and os.path.getsize(target_path) > 0:
-                self.log(f"[IMAGE_SELECT] vehicle_id={track_id} Found image matching plate '{plate_text}': {target_filename}")
+                file_size = os.path.getsize(target_path)
+                self.log(f"[IMAGE_SELECT] vehicle_id={track_id} ✓ Found: {target_filename} (size={file_size})")
                 return target_path
+            else:
+                self.log(f"[IMAGE_SELECT] vehicle_id={track_id} ℹ Not found: {target_filename}")
             
             # Strategy 3: Pick largest image (best quality/coverage)
+            self.log(f"[IMAGE_SELECT] vehicle_id={track_id} Strategy 3: Looking for largest image in directory")
             image_sizes = []
-            for img_file in os.listdir(vehicle_dir):
+            for img_file in all_files:
                 if img_file.endswith('.png'):
                     try:
                         img_path = os.path.join(vehicle_dir, img_file)
@@ -164,10 +191,11 @@ class PlateProcessor:
                 image_sizes.sort(key=lambda x: x[1], reverse=True)
                 best_image = image_sizes[0][0]
                 image_path = os.path.join(vehicle_dir, best_image)
-                self.log(f"[IMAGE_SELECT] vehicle_id={track_id} Using largest image by size: {best_image} ({image_sizes[0][1]} bytes)")
+                file_size = image_sizes[0][1]
+                self.log(f"[IMAGE_SELECT] vehicle_id={track_id} ✓ Found largest image: {best_image} (size={file_size})")
                 return image_path
             
-            self.log(f"[IMAGE_SELECT] vehicle_id={track_id} No valid images found in {vehicle_dir}")
+            self.log(f"[IMAGE_SELECT] vehicle_id={track_id} ❌ No valid images found in {vehicle_dir} (checked {len(png_files)} PNG files)")
             return None
             
         except Exception as e:
@@ -311,23 +339,73 @@ class PlateProcessor:
             elif track_id not in self.vehicle_directions:
                 self.vehicle_directions[track_id] = "Unknown"
 
-            # Detect license plate
-            self.log(f"[PLATE] vehicle_id={track_id} Calling detect_license_plate_sync...")
-            license_plate_info = detect_license_plate_sync(
+            # Submit plate detection to inference queue asynchronously
+            # This avoids model_lock bottleneck by queuing tasks
+            self.log(f"[PLATE] vehicle_id={track_id} Submitting plate detection to inference queue...")
+            
+            # Increment pending queue task count BEFORE submitting
+            with self._task_count_lock:
+                if track_id not in self.vehicle_pending_queue_tasks:
+                    self.vehicle_pending_queue_tasks[track_id] = 0
+                self.vehicle_pending_queue_tasks[track_id] += 1
+                self.log(f"[PLATE] vehicle_id={track_id} Pending queue tasks: {self.vehicle_pending_queue_tasks[track_id]}")
+            
+            def _plate_detection_callback(license_plate_info):
+                """Callback invoked when plate detection completes."""
+                self._process_plate_result(
+                    track_id,
+                    license_plate_info,
+                    direction_label,
+                    frame_timestamp,
+                    vehicle_frame,
+                    vehicle_dir,
+                )
+            
+            submit_plate_detection_async(
                 self.plate_model,
                 vehicle_frame,
                 self.ocr_reader,
                 self._model_lock,
                 timestamp_str,
+                callback=_plate_detection_callback,
                 vehicle_dir=vehicle_dir,
                 track_id=track_id,
             )
+            
+        except Exception as e:
+            self.log(f"[PLATE] vehicle_id={track_id} ✗ Detection error: {e}")
+            import traceback
+            self.log(f"[PLATE] vehicle_id={track_id} Traceback: {traceback.format_exc()}")
+
+    def _process_plate_result(
+        self,
+        track_id,
+        license_plate_info,
+        direction_label,
+        frame_timestamp,
+        vehicle_frame,
+        vehicle_dir,
+    ):
+        """
+        Process the result of plate detection asynchronously.
+        This is called by the inference queue when detection completes.
+        
+        Args:
+            track_id: Vehicle track ID
+            license_plate_info: Result dict from detect_license_plate_sync
+            direction_label: Vehicle direction label
+            frame_timestamp: Actual detection datetime object
+            vehicle_frame: The original vehicle frame
+            vehicle_dir: Directory for saving images
+        """
+        try:
+            self.log(f"[PLATE_RESULT] vehicle_id={track_id} Processing plate result (ENTRY)")
             plate_text = license_plate_info.get("text") if license_plate_info else None
             count_detections = license_plate_info.get("count") if license_plate_info else 0
             # Ensure count_detections is always an integer (never None)
             if count_detections is None:
                 count_detections = 0
-            self.log(f"[PLATE] vehicle_id={track_id} Detection result: plate={plate_text}, count={count_detections}")
+            self.log(f"[PLATE_RESULT] vehicle_id={track_id} Detection result: plate={plate_text}, count={count_detections}")
             log_plate(track_id, f"detected_plate={plate_text}")
             
             # Only send notifications for vehicles entering (not exiting)
@@ -447,10 +525,21 @@ class PlateProcessor:
                     detection_count = plate_counts.get(plate_text, 0)
                     detected_image_name = f"detected_plate_{detection_count:02d}_{sanitized_plate}.png"
                     detected_image_path = os.path.join(vehicle_dir, detected_image_name)
+                    
+                    # Save image and verify it was written
                     cv2.imwrite(detected_image_path, vehicle_frame)
+                    if os.path.exists(detected_image_path) and os.path.getsize(detected_image_path) > 0:
+                        file_size = os.path.getsize(detected_image_path)
+                        self.log(f"[PLATE_IMAGE] vehicle_id={effective_track_id} ✓ Image saved: {detected_image_path} ({file_size} bytes)")
+                    else:
+                        self.log(f"[PLATE_IMAGE] vehicle_id={effective_track_id} ⚠ Image save FAILED or empty: {detected_image_path}")
                     
                     # Track this image as having a successfully detected plate
+                    # Store by BOTH track_id and effective_track_id to ensure we can find it later
                     self.vehicle_detected_plate_images[effective_track_id] = detected_image_path
+                    if track_id != effective_track_id:
+                        self.vehicle_detected_plate_images[track_id] = detected_image_path
+                        self.log(f"[PLATE_IMAGE] vehicle_id={track_id} Stored image path for versioned ID")
                     
                     log_plate(effective_track_id, f"Saved detected plate image: {detected_image_name}")
                     self.log(f"[PLATE] vehicle_id={effective_track_id} ✓ Accumulated plate detection: {plate_text}, images saved")
@@ -458,9 +547,42 @@ class PlateProcessor:
                     # vehicle_plate_counts is only used for end-of-day summary calculations
                     # Notification will be sent using vehicle_plates when all background tasks complete (via _on_plate_task_complete callback)
         except Exception as e:
-            self.log(f"[PLATE] vehicle_id={track_id} ✗ Detection error: {e}")
+            self.log(f"[PLATE] vehicle_id={track_id} ✗ Error processing plate result: {e}")
             import traceback
             self.log(f"[PLATE] vehicle_id={track_id} Traceback: {traceback.format_exc()}")
+        finally:
+            # Decrement queue task counter when callback completes
+            with self._task_count_lock:
+                if track_id in self.vehicle_pending_queue_tasks:
+                    self.vehicle_pending_queue_tasks[track_id] -= 1
+                    pending_queue_tasks = self.vehicle_pending_queue_tasks[track_id]
+                    pending_executor_tasks = self.vehicle_pending_task_count.get(track_id, 0)
+                    total_pending = pending_queue_tasks + pending_executor_tasks
+                    
+                    self.log(f"[PLATE_QUEUE] vehicle_id={track_id} Queue callback done. Queue: {pending_queue_tasks}, Executor: {pending_executor_tasks}, Total: {total_pending}")
+                    
+                    # If ALL tasks (executor + queue) are done, send notification from queue callback
+                    # This way ensures we don't send twice (once from executor, once from queue)
+                    if total_pending == 0:
+                        self.log(f"[PLATE_QUEUE] vehicle_id={track_id} ✓✓ ALL tasks complete (queue + executor). Sending final notification...")
+                        vehicle_dir = f"screenshots/{track_id}"
+                        
+                        # Send notification OUTSIDE the lock to avoid blocking
+                        try:
+                            result = self.send_final_vehicle_notification(track_id, vehicle_dir=vehicle_dir)
+                            if result:
+                                self.log(f"[PLATE_QUEUE] vehicle_id={track_id} ✓ Notification sent successfully")
+                            else:
+                                self.log(f"[PLATE_QUEUE] vehicle_id={track_id} ⚠ Notification sending failed or skipped")
+                        except Exception as ex:
+                            self.log(f"[PLATE_QUEUE] vehicle_id={track_id} ❌ Error sending notification: {ex}")
+                        
+                        # Clean up when completely done
+                        self.vehicle_pending_queue_tasks.pop(track_id, None)
+                        self.vehicle_pending_task_count.pop(track_id, None)
+                        self.log(f"[PLATE_QUEUE] vehicle_id={track_id} Cleaned up all pending task counts")
+
+
 
     def submit_plate_processing(
         self,
@@ -507,12 +629,11 @@ class PlateProcessor:
 
     def _on_plate_task_complete(self, track_id, vehicle_dir):
         """
-        Callback called when a background plate detection task completes.
-        Decrements task count when all tasks for this vehicle are done.
-        Sends notification immediately when all background tasks complete.
+        Callback called when a background plate detection task completes (executor task).
+        Decrements executor task count when all tasks for this vehicle are done.
         
-        Note: vehicle_plates is already set during process_plate_background_sync.
-        vehicle_plate_counts is only used for end-of-day summary, not for intermediate decisions.
+        NOTE: This is called when executor task completes, but inference queue tasks may still be running.
+        We now check BOTH executor + queue tasks before sending notification.
         
         Args:
             track_id: Vehicle track ID
@@ -522,13 +643,20 @@ class PlateProcessor:
             with self._task_count_lock:
                 if track_id in self.vehicle_pending_task_count:
                     self.vehicle_pending_task_count[track_id] -= 1
-                    remaining_tasks = self.vehicle_pending_task_count[track_id]
+                    remaining_executor_tasks = self.vehicle_pending_task_count[track_id]
+                    remaining_queue_tasks = self.vehicle_pending_queue_tasks.get(track_id, 0)
+                    total_remaining = remaining_executor_tasks + remaining_queue_tasks
                     
-                    self.log(f"[TASK_COMPLETE] vehicle_id={track_id} Background task completed. Remaining tasks: {remaining_tasks}")
+                    self.log(f"[TASK_COMPLETE] vehicle_id={track_id} Executor task completed. Executor: {remaining_executor_tasks}, Queue: {remaining_queue_tasks}, Total: {total_remaining}")
                     
-                    # If all tasks for this vehicle are done
-                    if remaining_tasks == 0:
-                        self.log(f"[TASK_COMPLETE] vehicle_id={track_id} ✓ All background tasks completed")
+                    # Check if we still have pending queue tasks
+                    if remaining_queue_tasks > 0:
+                        self.log(f"[TASK_COMPLETE] vehicle_id={track_id} Still pending queue tasks ({remaining_queue_tasks}), waiting for queue callback...")
+                        return  # Don't send notification yet - queue callback will handle it
+                    
+                    # If all tasks for this vehicle are done AND no queue tasks pending
+                    if total_remaining == 0:
+                        self.log(f"[TASK_COMPLETE] vehicle_id={track_id} ✓ All background tasks completed (executor + queue)")
                         
                         # Best plate is already set from process_plate_background_sync
                         current_best_plate = self.get_most_detected_plate(track_id)[0]
@@ -538,11 +666,13 @@ class PlateProcessor:
                         self.log(f"[TASK_COMPLETE] vehicle_id={track_id} ✓ All detection tasks done, ready to send notification now")
             
             # Send notification OUTSIDE the lock to avoid blocking other operations
-            # Only send if all tasks are complete (remaining_tasks == 0)
+            # Only send if all tasks are complete (total_remaining == 0)
             with self._task_count_lock:
-                remaining_tasks = self.vehicle_pending_task_count.get(track_id, 0)
+                remaining_executor_tasks = self.vehicle_pending_task_count.get(track_id, 0)
+                remaining_queue_tasks = self.vehicle_pending_queue_tasks.get(track_id, 0)
+                total_remaining = remaining_executor_tasks + remaining_queue_tasks
             
-            if remaining_tasks == 0:
+            if total_remaining == 0:
                 self.log(f"[TASK_COMPLETE] vehicle_id={track_id} ► Sending notification now (all tasks complete)...")
                 result = self.send_final_vehicle_notification(track_id, vehicle_dir=vehicle_dir)
                 if result:
@@ -555,11 +685,14 @@ class PlateProcessor:
             import traceback
             self.log(f"[TASK_COMPLETE] Traceback: {traceback.format_exc()}")
         finally:
-            # Clean up pending task count for this vehicle
+            # Clean up pending task counts for this vehicle if all done
             with self._task_count_lock:
-                if track_id in self.vehicle_pending_task_count and self.vehicle_pending_task_count[track_id] == 0:
+                executor_tasks = self.vehicle_pending_task_count.get(track_id, 0)
+                queue_tasks = self.vehicle_pending_queue_tasks.get(track_id, 0)
+                if executor_tasks == 0 and queue_tasks == 0:
                     self.vehicle_pending_task_count.pop(track_id, None)
-                    self.log(f"[TASK_COMPLETE] vehicle_id={track_id} Cleaned up pending_task_count")
+                    self.vehicle_pending_queue_tasks.pop(track_id, None)
+                    self.log(f"[TASK_COMPLETE] vehicle_id={track_id} Cleaned up all pending task counts")
 
     def wait_pending_tasks_for_vehicle(self, track_id, timeout=30):
         """
@@ -614,42 +747,70 @@ class PlateProcessor:
         
         start_time = time.time()
         
-        # Get list of tracked vehicles with pending tasks
+        # Get list of tracked vehicles with pending tasks (both executor and queue)
         with self._task_count_lock:
-            pending_vehicles = list(self.vehicle_pending_task_count.keys())
-            pending_count = len(pending_vehicles)
+            pending_executor_vehicles = list(self.vehicle_pending_task_count.keys())
+            pending_queue_vehicles = list(self.vehicle_pending_queue_tasks.keys())
+            all_pending_vehicles = list(set(pending_executor_vehicles + pending_queue_vehicles))
+            pending_count = len(all_pending_vehicles)
         
         if pending_count == 0:
             self.log(f"[WAIT_ALL_TASKS] No pending background tasks")
             return True
         
         self.log(f"[WAIT_ALL_TASKS] Waiting for {pending_count} vehicles with pending tasks (timeout={timeout}s)...")
+        self.log(f"[WAIT_ALL_TASKS] Executor tasks: {pending_executor_vehicles}, Queue tasks: {pending_queue_vehicles}")
         
         # Wait for all vehicles
-        for track_id in pending_vehicles:
+        for track_id in all_pending_vehicles:
             elapsed = time.time() - start_time
             remaining_timeout = timeout - elapsed
             
             if remaining_timeout <= 0:
                 self.log(f"[WAIT_ALL_TASKS] ⚠ Timeout reached before waiting for all vehicles")
+                with self._task_count_lock:
+                    lingering = {
+                        "executor": {k: self.vehicle_pending_task_count.get(k, 0) for k in all_pending_vehicles},
+                        "queue": {k: self.vehicle_pending_queue_tasks.get(k, 0) for k in all_pending_vehicles}
+                    }
+                self.log(f"[WAIT_ALL_TASKS] Lingering tasks: {lingering}")
                 return False
             
             with self._task_count_lock:
-                remaining = self.vehicle_pending_task_count.get(track_id, 0)
+                remaining_executor = self.vehicle_pending_task_count.get(track_id, 0)
+                remaining_queue = self.vehicle_pending_queue_tasks.get(track_id, 0)
+                total_remaining = remaining_executor + remaining_queue
             
-            if remaining > 0:
-                self.log(f"[WAIT_ALL_TASKS] Waiting for vehicle_id={track_id} ({remaining} pending tasks, {remaining_timeout:.1f}s remaining)...")
+            if total_remaining > 0:
+                self.log(f"[WAIT_ALL_TASKS] Waiting for vehicle_id={track_id} (Executor: {remaining_executor}, Queue: {remaining_queue}, {remaining_timeout:.1f}s remaining)...")
                 self.wait_pending_tasks_for_vehicle(track_id, timeout=remaining_timeout)
         
         # Final check - wait a bit for callbacks to complete (includes the daemon thread delay)
-        time.sleep(0.5)
+        time.sleep(1.0)
+        
+        # Explicitly wait for inference queue to drain all remaining tasks
+        self.log(f"[WAIT_ALL_TASKS] Waiting for inference queue to drain...")
+        try:
+            from VehicleDetectionTracker.plate_utils import get_inference_queue
+            queue_instance = get_inference_queue()
+            if queue_instance:
+                queue_instance.wait_for_all_tasks()
+                self.log(f"[WAIT_ALL_TASKS] ✓ Inference queue drained")
+        except Exception as e:
+            self.log(f"[WAIT_ALL_TASKS] ⚠ Error draining inference queue: {e}")
         
         # Verify all are done
         with self._task_count_lock:
-            final_pending = list(self.vehicle_pending_task_count.keys())
+            final_executor = list(self.vehicle_pending_task_count.keys())
+            final_queue = list(self.vehicle_pending_queue_tasks.keys())
+            final_pending = list(set(final_executor + final_queue))
         
         if final_pending:
-            self.log(f"[WAIT_ALL_TASKS] ⚠ Some vehicles still have pending tasks: {final_pending}")
+            self.log(f"[WAIT_ALL_TASKS] ⚠ Some vehicles still have pending tasks after wait:")
+            for track_id in final_pending:
+                exec_remaining = self.vehicle_pending_task_count.get(track_id, 0)
+                queue_remaining = self.vehicle_pending_queue_tasks.get(track_id, 0)
+                self.log(f"[WAIT_ALL_TASKS]   vehicle_id={track_id}: Executor={exec_remaining}, Queue={queue_remaining}")
             return False
         else:
             self.log(f"[WAIT_ALL_TASKS] ✓ All background tasks completed successfully")
@@ -809,11 +970,31 @@ class PlateProcessor:
                 
                 # Find best image matching the detected plate
                 image_path = None
-                if vehicle_dir:
+                
+                # First, try using the stored vehicle_detected_plate_images
+                if track_id in self.vehicle_detected_plate_images:
+                    stored_path = self.vehicle_detected_plate_images[track_id]
+                    if os.path.exists(stored_path) and os.path.getsize(stored_path) > 0:
+                        image_path = stored_path
+                        self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} Using stored image: {stored_path}")
+                    else:
+                        self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} ⚠ Stored image not found or empty: {stored_path}")
+                
+                # If stored image not available, search vehicle_dir
+                if not image_path and vehicle_dir:
                     image_path = self._get_best_vehicle_image_by_plate(vehicle_dir, plate_text, track_id)
+                    if not image_path:
+                        self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} ⚠ No image found in {vehicle_dir}")
+                    else:
+                        self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} ✓ Found image in directory: {image_path}")
+                else:
+                    if image_path:
+                        self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} ✓ Using stored image path")
+                    else:
+                        self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} ⚠ No vehicle_dir provided")
                 
                 # Send final notification with best plate (OUTSIDE of lock)
-                self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} ► Calling Telegram API...")
+                self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} ► Calling Telegram API with image_path={image_path}...")
                 try:
                     telegram_response = send_notify_to_telegram(
                         plate_text,
@@ -821,7 +1002,7 @@ class PlateProcessor:
                         frame_timestamp,
                         image_path=image_path,
                     )
-                    self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} ✓ Telegram API call completed (success={telegram_response})")
+                    self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} ✓ Telegram API call completed (success={telegram_response.get('ok', False)})")
                 except Exception as e:
                     self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} ✗ Telegram API error: {e}")
                     telegram_response = {"ok": False, "error": str(e)}

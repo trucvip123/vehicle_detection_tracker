@@ -5,8 +5,165 @@ import torch
 from datetime import datetime
 from pathlib import Path
 from ultralytics import YOLO
+import threading
+import queue
+from concurrent.futures import ThreadPoolExecutor
 
 from VehicleDetectionTracker.function import utils_rotate, helper
+
+
+# ============================================================================
+# Queue-based Inference System to avoid model_lock bottleneck
+# ============================================================================
+
+class InferenceQueue:
+    """Queue-based inference system to prevent lock contention."""
+    
+    def __init__(self, num_workers=2):
+        """Initialize inference queue with worker threads.
+        
+        Args:
+            num_workers (int): Number of worker threads for inference
+        """
+        self.task_queue = queue.Queue()
+        self.num_workers = num_workers
+        self.workers = []
+        self.running = True
+        self._start_workers()
+        _log(f"[INFERENCE_QUEUE] Initialized with {num_workers} worker threads")
+    
+    def _start_workers(self):
+        """Start worker threads."""
+        for i in range(self.num_workers):
+            # Use daemon=True so they don't block program exit
+            # But we'll explicitly wait for queue to drain in shutdown()
+            worker = threading.Thread(target=self._worker_loop, daemon=True, name=f"InferenceWorker-{i}")
+            worker.start()
+            self.workers.append(worker)
+            _log(f"[INFERENCE_QUEUE] Started worker thread {i}: {worker.name} (daemon=True)")
+    
+    def _worker_loop(self):
+        """Main loop for worker thread - processes tasks from queue."""
+        worker_name = threading.current_thread().name
+        _log(f"[INFERENCE_QUEUE] {worker_name} started")
+        
+        while self.running:
+            try:
+                # Get task from queue (block with timeout to allow graceful shutdown)
+                task = self.task_queue.get(timeout=1.0)
+                if task is None:  # Shutdown signal
+                    _log(f"[INFERENCE_QUEUE] {worker_name} received shutdown signal")
+                    break
+                
+                # Unpack task
+                task_func, task_args, callback = task
+                
+                try:
+                    _log(f"[INFERENCE_QUEUE] {worker_name} executing task...")
+                    # Execute the task
+                    result = task_func(*task_args)
+                    _log(f"[INFERENCE_QUEUE] {worker_name} task executed, result={result if result is None else 'plate_detected'}")
+                    # Call callback with result
+                    if callback:
+                        _log(f"[INFERENCE_QUEUE] {worker_name} calling callback...")
+                        callback(result)
+                        _log(f"[INFERENCE_QUEUE] {worker_name} callback completed")
+                except Exception as e:
+                    _log(f"[INFERENCE_QUEUE] ⚠ {worker_name} Error in worker task: {e}")
+                    import traceback
+                    _log(f"[INFERENCE_QUEUE] {worker_name} Traceback: {traceback.format_exc()}")
+                    if callback:
+                        try:
+                            callback(None)
+                        except Exception as cb_err:
+                            _log(f"[INFERENCE_QUEUE] ⚠ {worker_name} Callback error: {cb_err}")
+                finally:
+                    self.task_queue.task_done()
+            
+            except queue.Empty:
+                continue
+            except Exception as e:
+                _log(f"[INFERENCE_QUEUE] ⚠ {worker_name} Worker error: {e}")
+        
+        _log(f"[INFERENCE_QUEUE] {worker_name} stopped")
+    
+    def submit_task(self, task_func, task_args, callback=None):
+        """Submit a task to the inference queue.
+        
+        Args:
+            task_func: Function to execute
+            task_args: Tuple of arguments for task_func
+            callback: Optional callback function called with result when task completes
+        """
+        self.task_queue.put((task_func, task_args, callback))
+    
+    def wait_for_all_tasks(self, timeout=None):
+        """Wait for all queued tasks to complete.
+        
+        Args:
+            timeout: Maximum time to wait (None = wait forever, as per queue.join())
+            
+        Returns:
+            bool: True if all tasks completed, False if we need to give up
+        """
+        try:
+            import sys
+            queue_size = self.task_queue.qsize()
+            _log(f"[INFERENCE_QUEUE] Waiting for {queue_size} tasks to complete (this blocks until all tasks are processed)...")
+            sys.stdout.flush()
+            
+            self.task_queue.join()  # Blocks until all tasks are done (task_done called for each)
+            
+            _log(f"[INFERENCE_QUEUE] ✓ Queue.join() completed - all tasks are done")
+            return True
+        except Exception as e:
+            _log(f"[INFERENCE_QUEUE] ⚠ Error waiting for tasks: {e}")
+            return False
+    
+    def shutdown(self):
+        """Shutdown the inference queue gracefully.
+        
+        This will:
+        1. Wait for all pending tasks in queue to complete
+        2. Send shutdown signals to workers
+        3. Workers are daemon threads, so they'll exit when main thread exits
+        """
+        _log(f"[INFERENCE_QUEUE] Starting graceful shutdown...")
+        
+        # Step 1: Wait for all remaining tasks to complete
+        _log(f"[INFERENCE_QUEUE] Step 1: Waiting for all queued tasks to complete...")
+        self.wait_for_all_tasks()
+        
+        # Step 2: Signal workers to stop
+        _log(f"[INFERENCE_QUEUE] Step 2: Signaling workers to stop...")
+        self.running = False
+        
+        # Step 3: Send None signals for clean shutdown
+        for _ in range(self.num_workers):
+            self.task_queue.put(None)
+        
+        _log(f"[INFERENCE_QUEUE] Shutdown initiated - daemon workers will exit with main thread")
+        _log(f"[INFERENCE_QUEUE] ✓ Shutdown complete")
+
+
+# Global inference queue instance
+_inference_queue = None
+
+
+def initialize_inference_queue(num_workers=2):
+    """Initialize the global inference queue."""
+    global _inference_queue
+    if _inference_queue is None:
+        _inference_queue = InferenceQueue(num_workers=num_workers)
+    return _inference_queue
+
+
+def get_inference_queue():
+    """Get the global inference queue instance."""
+    global _inference_queue
+    if _inference_queue is None:
+        _inference_queue = InferenceQueue(num_workers=5)
+    return _inference_queue
 
 
 def _ensure_log_dir():
@@ -326,3 +483,54 @@ def detect_license_plate_sync(
 
         _log(f"[PLATE_DETECT] vehicle_id={track_id} Traceback: {traceback.format_exc()}")
         return {"text": None, "count": None}
+
+
+def submit_plate_detection_async(
+    plate_model,
+    vehicle_frame,
+    ocr_reader,
+    model_lock,
+    timestamp_str,
+    callback,
+    vehicle_dir="screenshots",
+    track_id=None,
+):
+    """
+    Submit plate detection task to inference queue asynchronously.
+    
+    The callback will be called with the result dict: {"text": plate_text, "count": num_detections}
+    This avoids model_lock bottleneck by queuing up tasks instead of blocking.
+    
+    Args:
+        plate_model: YOLOv8 model
+        vehicle_frame: Cropped vehicle frame
+        ocr_reader: OCR reader instance
+        model_lock: Threading lock for model access
+        timestamp_str: Timestamp string for logging
+        callback: Function called with result when detection completes: callback(result_dict)
+        vehicle_dir: Directory to save plate images
+        track_id: Vehicle track ID for logging
+    """
+    try:
+        # Create a task function that wraps the sync detection
+        def _detection_task():
+            return detect_license_plate_sync(
+                plate_model,
+                vehicle_frame,
+                ocr_reader,
+                model_lock,
+                timestamp_str,
+                vehicle_dir=vehicle_dir,
+                track_id=track_id,
+            )
+        
+        # Get the inference queue and submit the task
+        queue_instance = get_inference_queue()
+        queue_instance.submit_task(_detection_task, (), callback)
+        
+        _log(f"[PLATE_DETECT] vehicle_id={track_id} ✓ Submitted to inference queue (queue_size={queue_instance.task_queue.qsize()})")
+    except Exception as e:
+        _log(f"[PLATE_DETECT] vehicle_id={track_id} ❌ Error submitting to inference queue: {e}")
+        # Fallback: call callback with None
+        if callback:
+            callback({"text": None, "count": None})

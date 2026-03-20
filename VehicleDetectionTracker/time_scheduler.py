@@ -39,6 +39,7 @@ def get_time_info():
 def is_outside_operating_hours():
     """
     Check if current time is outside the configured operating hours and return the next end_time for notification.
+    Checks both hours AND minutes for accurate time-based scheduling.
 
     Returns:
         tuple: (is_outside: bool, next_end_time: datetime)
@@ -52,40 +53,36 @@ def is_outside_operating_hours():
 
     time_info = get_time_info()
     now = time_info["datetime"]
-    current_hour = time_info["hour"]
 
     # Edge case: if start_hour == end_hour, always process (24/7)
     if not enabled or start_hour == end_hour:
         return (False, None)
 
+    # Create start and end times with current date at HH:00:00
+    start_time = now.replace(hour=start_hour, minute=0, second=0, microsecond=0)
+    end_time = now.replace(hour=end_hour, minute=0, second=0, microsecond=0)
+
     # Calculate next end_time (when operating hours end next)
     if start_hour < end_hour:
-        # Normal case: same day
-        if now.hour < end_hour:
-            end_time = now.replace(hour=end_hour, minute=0, second=0, microsecond=0)
-            if now >= end_time:
-                end_time = end_time + timedelta(days=1)
-        else:
-            # Already past end_hour, next end_time is tomorrow
-            end_time = (now + timedelta(days=1)).replace(
-                hour=end_hour, minute=0, second=0, microsecond=0
-            )
-        is_outside = not (start_hour <= current_hour < end_hour)
+        # Normal case: same day (e.g., 6:00 AM to 6:00 PM)
+        if now >= end_time:
+            # Already past end_hour today, next end_time is tomorrow
+            end_time = end_time + timedelta(days=1)
+        is_outside = not (start_time <= now < end_time)
     else:
-        # Overnight case
-        if current_hour >= start_hour:
-            # End time is tomorrow
+        # Overnight case (e.g., 10:00 PM to 6:00 AM)
+        if now >= start_time:
+            # After start_hour, end_time is tomorrow
             end_time = (now + timedelta(days=1)).replace(
                 hour=end_hour, minute=0, second=0, microsecond=0
             )
             is_outside = False
-        elif current_hour < end_hour:
-            # End time is today
+        elif now < end_time:
+            # Before end_hour (still in night hours)
             end_time = now.replace(hour=end_hour, minute=0, second=0, microsecond=0)
             is_outside = False
         else:
-            # Outside operating hours
-            # Next end_time is today at end_hour
+            # Outside operating hours (between end_hour and start_hour)
             end_time = now.replace(hour=end_hour, minute=0, second=0, microsecond=0)
             is_outside = True
 
@@ -101,9 +98,9 @@ def get_operating_hours_info():
             - 'enabled': Whether operating hours scheduling is enabled
             - 'start_hour': Start hour (0-23)
             - 'end_hour': End hour (0-23)
-            - 'current_hour': Current hour
+            - 'current_time': Current time in HH:MM:SS format
             - 'is_outside': Whether currently outside operating hours
-            - 'schedule_type': 'daily' or 'overnight' or '24/7'
+            - 'schedule_type': 'daily' or 'overnight' or '24/7' or 'disabled'
             - 'description': Human-readable description of operating hours
     """
     config = get_config()
@@ -114,8 +111,8 @@ def get_operating_hours_info():
     end_hour = operating_hours_config.get("end_hour", 20)
 
     time_info = get_time_info()
-    current_hour = time_info["hour"]
-    is_outside = is_outside_operating_hours()
+    current_time = time_info["current_time"]
+    is_outside, _ = is_outside_operating_hours()
 
     # Determine schedule type
     if not enabled:
@@ -135,8 +132,9 @@ def get_operating_hours_info():
         "enabled": enabled,
         "start_hour": start_hour,
         "end_hour": end_hour,
-        "current_hour": current_hour,
+        "current_time": current_time,
         "is_outside": is_outside,
+        "status": "Outside operating hours ❌" if is_outside else "Within operating hours ✓",
         "schedule_type": schedule_type,
         "description": description,
     }

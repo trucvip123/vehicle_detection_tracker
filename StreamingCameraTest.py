@@ -24,11 +24,15 @@ def main():
     # Option 1: Process camera/webcam stream (press 'q' to quit)
     print("Starting camera stream... (Press 'q' to quit)")
     RTSP_SOURCE = "rtsp://admin:MOVYKV@aicamera.ddns.net:554/Streaming/Channels/101"
-    VIDEO_SOURCE = r"video\m.mp4"
+    VIDEO_SOURCE = r"video\b.mp4"
 
     tracker.process_video_streaming(
-        VIDEO_SOURCE
+        RTSP_SOURCE
     )  # 0 for webcam, or use RTSP_SOURCE for live stream
+    
+    # **CRITICAL:** Wait for all pending tasks and send notifications before exit
+    print("\n" + "="*80)
+    tracker.cleanup()
 
 
 if __name__ == "__main__":
