@@ -1,6 +1,7 @@
 """
 Example: Streaming camera with license plate display in corner
 Optimized for real-time performance - no bounding boxes, only plate text
+Includes frame quality validation to filter low-quality frames
 """
 
 import os
@@ -21,19 +22,54 @@ def main():
     # Để tránh mờ hình, không resize (giữ nguyên kích thước gốc từ camera/RTSP).
     tracker = VehicleDetectionTracker()
 
-    # Option 1: Process camera/webcam stream (press 'q' to quit)
-    print("Starting camera stream... (Press 'q' to quit)")
+    # ===== FRAME QUALITY VALIDATION SETUP =====
+    # Frame quality validation is enabled by default
+    # You can customize the thresholds for your environment
+    
+    print("[SETUP] Frame quality validation is ENABLED")
+    print("[SETUP] Default thresholds:")
+    print("  - Brightness: 40-210 (optimal: 80-180)")
+    print("  - Blur variance (Laplacian): >= 100 (higher = sharper)")
+    print("  - Contrast (std dev): >= 15 (higher = more detail)")
+    print("  - Entropy: >= 3.0 (higher = more information)")
+    print("  - Overall quality score: >= 50.0/100")
+    
+    # To adjust thresholds for low-light environment, uncomment:
+    # tracker.frame_processor.set_quality_thresholds(
+    #     brightness_min=25.0,      # Allow darker images
+    #     blur_variance_min=80.0,   # More lenient on blur
+    #     quality_threshold=40.0,   # Lower overall threshold
+    # )
+    
+    # To disable frame quality validation, uncomment:
+    # tracker.frame_processor.set_quality_validation(False)
+    
+    print("\n[SETUP] Starting camera stream... (Press 'q' to quit)")
+    
     RTSP_SOURCE = "rtsp://admin:MOVYKV@aicamera.serveminecraft.net:554/Streaming/Channels/101"
     VIDEO_SOURCE = r"video\n.mp4"
 
-    tracker.process_video_streaming(
-        VIDEO_SOURCE
-    )  # 0 for webcam, or use RTSP_SOURCE for live stream
+    tracker.process_video_streaming(VIDEO_SOURCE)
     
     # **CRITICAL:** Wait for all pending tasks and send notifications before exit
     print("\n" + "="*80)
+    print("[CLEANUP] Waiting for all pending tasks...")
     tracker.cleanup()
+    
+    # Print frame quality statistics
+    quality_stats = tracker.frame_processor.get_quality_stats()
+    print("\n" + "="*80)
+    print("[QUALITY STATS] Frame processing summary:")
+    print(f"  - Frames processed: {quality_stats['frames_processed']}")
+    print(f"  - Frames rejected: {quality_stats['frames_rejected']}")
+    print(f"  - Total frames: {quality_stats['total_frames']}")
+    print(f"  - Rejection rate: {quality_stats['rejection_rate']:.1f}%")
+    print(
+        "\n[INFO] Higher rejection rate = filtering low-quality frames"
+        "\n       Adjust thresholds if rejection rate > 30% or < 5%"
+    )
 
 
 if __name__ == "__main__":
     main()
+

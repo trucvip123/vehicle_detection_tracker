@@ -13,6 +13,10 @@ from VehicleDetectionTracker.config_loader import (
     get_tracking_config,
 )
 from VehicleDetectionTracker.tracking_utils import map_direction_to_label
+from VehicleDetectionTracker.frame_quality import (
+    should_process_frame,
+    get_frame_quality_summary,
+)
 
 
 class FrameProcessor:
@@ -45,6 +49,17 @@ class FrameProcessor:
         self._vehicle_timeout = 300  # Remove vehicles not seen for 5 minutes (300s)
         self._last_cleanup_state = (0, 0)  # Track previous (total_vehicles, total_positions) to only log when changed
 
+        # Frame quality validation settings
+        self.quality_enabled = True
+        self.quality_threshold = 50.0  # Minimum quality score (0-100)
+        self.brightness_min = 40.0  # Minimum brightness (0-255)
+        self.brightness_max = 210.0  # Maximum brightness (0-255)
+        self.blur_variance_min = 100.0  # Minimum Laplacian variance for sharpness
+        self.contrast_min = 15.0  # Minimum contrast (std dev)
+        self.entropy_min = 3.0  # Minimum histogram entropy
+        self._frames_rejected = 0  # Track rejected frames
+        self._frames_processed = 0  # Track processed frames
+
     def process_frame_streaming(self, frame: np.ndarray, frame_timestamp: datetime, plate_processor: Any) -> np.ndarray:
         """
         Optimized frame processing for streaming: Fast detection, background OCR.
@@ -60,6 +75,29 @@ class FrameProcessor:
         """
         # Check and reset daily tracking at start of each day
         plate_processor.check_and_reset_daily_tracking()
+        
+        # ===== FRAME QUALITY VALIDATION =====
+        if self.quality_enabled:
+            should_process, quality_metrics = should_process_frame(
+                frame,
+                quality_threshold=self.quality_threshold,
+                brightness_min=self.brightness_min,
+                brightness_max=self.brightness_max,
+                blur_variance_min=self.blur_variance_min,
+                contrast_min=self.contrast_min,
+                entropy_min=self.entropy_min,
+                log_func=self.log,
+            )
+            
+            if not should_process:
+                self._frames_rejected += 1
+                quality_summary = get_frame_quality_summary(quality_metrics)
+                self.log(f"{quality_summary} [REJECTED]")
+                return frame
+            
+            self._frames_processed += 1
+        
+        # ===== END FRAME QUALITY VALIDATION =====
         
         tracking_config = get_tracking_config()
         results = self.model.track(
@@ -298,3 +336,76 @@ class FrameProcessor:
         if current_state != self._last_cleanup_state:
             self.log(f"[MEMORY_CLEANUP] Current state: {total_vehicles} vehicles, {total_positions} total positions in memory")
             self._last_cleanup_state = current_state
+
+    def set_quality_validation(self, enabled: bool) -> None:
+        """
+        Enable or disable frame quality validation.
+
+        Args:
+            enabled (bool): True to enable quality validation, False to disable.
+        """
+        self.quality_enabled = enabled
+        status = "ENABLED" if enabled else "DISABLED"
+        self.log(f"[QUALITY] Frame quality validation {status}")
+
+    def get_quality_stats(self) -> Dict[str, int]:
+        """
+        Get frame quality validation statistics.
+
+        Returns:
+            Dict with statistics:
+            - frames_processed: Number of frames that passed quality check
+            - frames_rejected: Number of frames that failed quality check
+            - rejection_rate: Percentage of frames rejected (0-100)
+        """
+        total_frames = self._frames_processed + self._frames_rejected
+        rejection_rate = (
+            (self._frames_rejected / total_frames * 100) if total_frames > 0 else 0
+        )
+        return {
+            "frames_processed": self._frames_processed,
+            "frames_rejected": self._frames_rejected,
+            "total_frames": total_frames,
+            "rejection_rate": rejection_rate,
+        }
+
+    def set_quality_thresholds(
+        self,
+        quality_threshold: Optional[float] = None,
+        brightness_min: Optional[float] = None,
+        brightness_max: Optional[float] = None,
+        blur_variance_min: Optional[float] = None,
+        contrast_min: Optional[float] = None,
+        entropy_min: Optional[float] = None,
+    ) -> None:
+        """
+        Set custom frame quality validation thresholds.
+
+        Args:
+            quality_threshold (float): Minimum quality score (0-100)
+            brightness_min (float): Minimum brightness (0-255)
+            brightness_max (float): Maximum brightness (0-255)
+            blur_variance_min (float): Minimum Laplacian variance for sharpness
+            contrast_min (float): Minimum contrast (std dev)
+            entropy_min (float): Minimum histogram entropy
+        """
+        if quality_threshold is not None:
+            self.quality_threshold = quality_threshold
+        if brightness_min is not None:
+            self.brightness_min = brightness_min
+        if brightness_max is not None:
+            self.brightness_max = brightness_max
+        if blur_variance_min is not None:
+            self.blur_variance_min = blur_variance_min
+        if contrast_min is not None:
+            self.contrast_min = contrast_min
+        if entropy_min is not None:
+            self.entropy_min = entropy_min
+
+        self.log(
+            f"[QUALITY] Thresholds updated: quality={self.quality_threshold}, "
+            f"brightness=[{self.brightness_min}, {self.brightness_max}], "
+            f"blur_var={self.blur_variance_min}, contrast={self.contrast_min}, "
+            f"entropy={self.entropy_min}"
+        )
+

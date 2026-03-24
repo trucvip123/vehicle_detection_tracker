@@ -163,7 +163,7 @@ operating_hours:
   # Ví dụ: 18 = 6:00 PM
   # Lưu ý: nếu start_hour < end_hour, xử lý từ start_hour đến end_hour
   #        nếu start_hour > end_hour, xử lý từ start_hour đến 23:59 và 0:00 đến end_hour (qua đêm)
-  end_hour: 18
+  end_hour: 21
   
   # Thời gian lệch (timezone offset) nếu cần
   # Ví dụ: 7 cho timezone Việt Nam (UTC+7)
