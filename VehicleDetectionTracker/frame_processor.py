@@ -3,6 +3,7 @@
 import math
 import os
 import glob
+import time
 import cv2
 from datetime import datetime
 from collections import defaultdict
@@ -17,6 +18,7 @@ from VehicleDetectionTracker.frame_quality import (
     should_process_frame,
     get_frame_quality_summary,
 )
+from VehicleDetectionTracker.metrics import get_metrics_collector
 
 
 class FrameProcessor:
@@ -25,6 +27,7 @@ class FrameProcessor:
     def __init__(self, model: Any, log_func: Callable[[str], None]) -> None:
         self.model = model
         self.log = log_func
+        self.metrics = get_metrics_collector()  # Get metrics collector instance
 
         # Tracking data
         self.track_history = defaultdict(lambda: [])
@@ -73,6 +76,9 @@ class FrameProcessor:
         Returns:
             numpy.ndarray: Frame with license plates displayed in corner.
         """
+        frame_start_time = datetime.now()  # Start timing frame processing
+        frame_processing_time_start = time.time()  # For metrics
+        
         # Check and reset daily tracking at start of each day
         plate_processor.check_and_reset_daily_tracking()
         
@@ -93,6 +99,13 @@ class FrameProcessor:
                 self._frames_rejected += 1
                 quality_summary = get_frame_quality_summary(quality_metrics)
                 self.log(f"{quality_summary} [REJECTED]")
+                # Record frame quality rejection in metrics
+                frame_processing_time = time.time() - frame_processing_time_start
+                self.metrics.record_frame_processed(
+                    frame_processing_time,
+                    is_quality_rejected=True,
+                    issues=quality_metrics.get("issues", [])
+                )
                 return frame
             
             self._frames_processed += 1
@@ -285,6 +298,44 @@ class FrameProcessor:
                 )
             self._prev_active_vehicle_ids = current_track_ids.copy()
         
+        # ===== RECORD METRICS =====
+        frame_total_time = time.time() - frame_processing_time_start
+        
+        # Record frame processing metrics
+        self.metrics.record_frame_processed(
+            frame_total_time,
+            is_quality_rejected=False,
+            issues=[]
+        )
+        
+        # Record detection metrics
+        vehicles_count = len(current_track_ids)
+        # Calculate average detection confidence if we have results
+        avg_confidence = 0.0
+        if (
+            results is not None
+            and results[0] is not None
+            and hasattr(results[0].boxes, "conf")
+            and results[0].boxes.conf is not None
+        ):
+            confidences = results[0].boxes.conf.cpu().numpy()
+            if len(confidences) > 0:
+                avg_confidence = float(confidences.mean())
+        
+        self.metrics.record_detection(
+            confidence=avg_confidence,
+            vehicles_detected_count=vehicles_count,
+            processing_time=frame_total_time
+        )
+        
+        # Record tracking metrics
+        self.metrics.record_tracking_update(
+            active_vehicles=len(current_track_ids),
+            new_vehicle=False,  # Updated per-vehicle in loop above
+            tracking_lost=False,
+            reassigned=False
+        )
+        
         return frame
     
     def _cleanup_old_vehicle_data(self, current_timestamp: datetime, plate_processor: Any) -> None:
@@ -408,4 +459,13 @@ class FrameProcessor:
             f"blur_var={self.blur_variance_min}, contrast={self.contrast_min}, "
             f"entropy={self.entropy_min}"
         )
+
+    def get_metrics(self) -> 'MetricsCollector':
+        """
+        Get metrics collector instance for accessing metrics.
+
+        Returns:
+            MetricsCollector: Current metrics collector instance
+        """
+        return self.metrics
 

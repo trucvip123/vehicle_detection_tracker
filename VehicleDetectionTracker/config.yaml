@@ -122,7 +122,7 @@ threading:
 # ============================================
 paths:
   # Đường dẫn đến model YOLO vehicle detection
-  yolo_model: "yolov8n.pt"
+  yolo_model: "model/yolov8n.pt"
   
   # Đường dẫn đến model license plate detector
   plate_model: "model/license_plate_detector.pt"

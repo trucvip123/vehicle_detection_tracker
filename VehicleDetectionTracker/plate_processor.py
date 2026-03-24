@@ -20,6 +20,7 @@ from VehicleDetectionTracker.vehicle_summary import (
     levenshtein_distance,
     merge_similar_plates,
 )
+from VehicleDetectionTracker.metrics import get_metrics_collector
 
 
 # Global sets to track vehicle notifications
@@ -54,6 +55,7 @@ class PlateProcessor:
         self.ocr_reader = ocr_reader
         self.executor = executor
         self.log = log_func
+        self.metrics = get_metrics_collector()  # Get metrics collector instance
 
         # Track detected plates per vehicle
         self.vehicle_plates = {}  # {track_id: plate_text}
@@ -486,13 +488,17 @@ class PlateProcessor:
             vehicle_dir: Directory for saving images
         """
         try:
+            import time as time_module
+            plate_detection_start = time_module.time()
+            
             self.log(f"[PLATE_RESULT] vehicle_id={track_id} Processing plate result (ENTRY)")
             plate_text = license_plate_info.get("text") if license_plate_info else None
             count_detections = license_plate_info.get("count") if license_plate_info else 0
+            confidence = license_plate_info.get("confidence", 0.0) if license_plate_info else 0.0
             # Ensure count_detections is always an integer (never None)
             if count_detections is None:
                 count_detections = 0
-            self.log(f"[PLATE_RESULT] vehicle_id={track_id} Detection result: plate={plate_text}, count={count_detections}")
+            self.log(f"[PLATE_RESULT] vehicle_id={track_id} Detection result: plate={plate_text}, count={count_detections}, confidence={confidence:.3f}")
             log_plate(track_id, f"detected_plate={plate_text}")
             
             # Only send notifications for vehicles entering (not exiting)
@@ -580,6 +586,15 @@ class PlateProcessor:
                     if plate_text not in self.vehicle_plate_counts_each_frame[effective_track_id]:
                         self.vehicle_plate_counts_each_frame[effective_track_id][plate_text] = 0
                     self.vehicle_plate_counts_each_frame[effective_track_id][plate_text] += 1
+                    
+                    # Record plate detection in metrics
+                    plate_detection_time = time_module.time() - plate_detection_start
+                    self.metrics.record_plate_detection(
+                        confidence=float(confidence),
+                        processing_time=plate_detection_time,
+                        ocr_attempted=True,
+                        ocr_success=(plate_text is not None and plate_text != "unknown")
+                    )
                     
                     # NOTE: Do NOT use vehicle_plate_counts for intermediate decisions
                     # vehicle_plate_counts is only for end-of-day summary
@@ -1123,9 +1138,13 @@ class PlateProcessor:
                         _vehicle_telegram_sent_with_plate.add(track_id)
                     
                     self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} ✓ Final notification sent with plate={plate_text}")
+                    # Record successful notification in metrics
+                    self.metrics.record_notification_sent(success=True, api_call=True)
                     notification_sent = True
                 else:
                     self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} ⚠ Telegram API failed, will retry later")
+                    # Record failed notification in metrics
+                    self.metrics.record_notification_sent(success=False, api_call=True)
                     notification_sent = False
             
             if notification_sent:
@@ -1133,6 +1152,10 @@ class PlateProcessor:
                 self._save_state()
                 self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} ✓ State saved")
                 return True
+            else:
+                # Record failed notification attempt if no plate was sent
+                if not notification_sent:
+                    self.metrics.record_notification_sent(success=False, api_call=True)
             
             return False
                     
@@ -1140,6 +1163,8 @@ class PlateProcessor:
             self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} Error sending final notification: {e}")
             import traceback
             self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} Traceback: {traceback.format_exc()}")
+            # Record error in notification metrics
+            self.metrics.record_notification_sent(success=False, api_call=False)
             return False
 
     def _get_state_file_path(self, date_str: Optional[str] = None) -> str:
@@ -1231,6 +1256,15 @@ class PlateProcessor:
                 reset_daily_tracking()  # Reset telegram notification tracking
                 
                 self.log(f"[DAILY_RESET] ✓ All daily tracking data reset for new day")
+
+    def get_metrics(self) -> 'MetricsCollector':
+        """
+        Get metrics collector instance for accessing metrics.
+
+        Returns:
+            MetricsCollector: Current metrics collector instance
+        """
+        return self.metrics
 
     def _save_state(self) -> None:
         """Save vehicle state to JSON file for persistence (one file per day)."""
