@@ -140,8 +140,8 @@ class FrameProcessor:
                 except Exception as e:
                     self.log(f"Error saving frame: {e}")
 
-                # Update last seen
-                plate_processor.vehicle_last_seen[track_id] = frame_timestamp
+                # Update last seen (thread-safe via plate_processor)
+                plate_processor.update_vehicle_state(track_id, timestamp=frame_timestamp)
                 self.log(
                     f"[DEBUG] Updated vehicle_last_seen[{track_id}] = {frame_timestamp}"
                 )
@@ -188,13 +188,14 @@ class FrameProcessor:
                     direction = math.atan2(final_y - initial_y, final_x - initial_x)
                     direction_label = map_direction_to_label(direction)
                     
-                    # Check if direction changed from previous update
-                    prev_direction = plate_processor.vehicle_directions.get(track_id, "Unknown")
+                    # Check if direction changed from previous update (thread-safe read)
+                    prev_direction = plate_processor.get_vehicle_directions_copy().get(track_id, "Unknown")
                     self.log(
                         f"[TRACK] vehicle_id={track_id} direction_calculation: recent_points={len(recent_positions)}/{len(positions)}, from=({initial_x:.1f},{initial_y:.1f}) to=({final_x:.1f},{final_y:.1f}), angle={direction:.2f}, label={direction_label}, prev={prev_direction}"
                     )
                     
-                    plate_processor.vehicle_directions[track_id] = direction_label
+                    # Update direction (thread-safe via plate_processor)
+                    plate_processor.update_vehicle_state(track_id, direction=direction_label)
                     # Note: State will be saved only when notification is sent
                 else:
                     self.log(

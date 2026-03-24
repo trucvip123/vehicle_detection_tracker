@@ -65,10 +65,12 @@ def is_outside_operating_hours():
     # Calculate next end_time (when operating hours end next)
     if start_hour < end_hour:
         # Normal case: same day (e.g., 6:00 AM to 6:00 PM)
+        # First: check if we're OUTSIDE operating hours (based on TODAY's times)
+        is_outside = (now < start_time) or (now >= end_time)
+        # Then: adjust end_time for notification purposes
         if now >= end_time:
             # Already past end_hour today, next end_time is tomorrow
             end_time = end_time + timedelta(days=1)
-        is_outside = not (start_time <= now < end_time)
     else:
         # Overnight case (e.g., 10:00 PM to 6:00 AM)
         if now >= start_time:

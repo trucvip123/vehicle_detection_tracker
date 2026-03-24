@@ -14,6 +14,10 @@ def levenshtein_distance(s1, s2):
     Returns:
         int: Number of character differences
     """
+    # Handle None values gracefully
+    if s1 is None or s2 is None:
+        return float('inf')  # Consider None as completely different
+    
     if len(s1) < len(s2):
         return levenshtein_distance(s2, s1)
     

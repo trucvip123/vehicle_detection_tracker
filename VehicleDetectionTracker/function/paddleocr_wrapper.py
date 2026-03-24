@@ -343,6 +343,7 @@ class PaddleOCRWrapper:
             counts = collections.Counter(normalized)
             _log_ocr(f"counts: {counts}", "ocr")
             most_common = counts.most_common(1)[0][0]
+            _log_ocr(f"most_common: {most_common}", "ocr")
             if not re.search(r"[A-Za-z]", most_common):
                 return None
             plate = most_common[:2].replace("B", "8").replace("T", "7") + most_common[2:]
@@ -354,10 +355,35 @@ class PaddleOCRWrapper:
             if re.search(r"[A-Za-z]", number_part):
                 return None
         
-        # print(f"DEBUG: plate before format: {plate}")
-        # Làm sạch định dạng kiểu 77A33151 -> 77A-331.51
-        plate = re.sub(r"^(\d{2}[A-Z])[- ]?(\d{3})(\d{2})$", r"\1-\2.\3", plate)
-        # print(f"DEBUG: plate after format: {plate}")
+        print(f"DEBUG: plate before format: {plate}")
+
+        # 1. Normalize (làm sạch dữ liệu OCR)
+        plate = plate.upper()
+        plate = re.sub(r"[^A-Z0-9]", "", plate)
+
+        # 2. Format
+
+        # ✅ Biển 5 số (ô tô / xe máy mới)
+        if re.match(r"^\d{2}[A-Z]\d{5}$", plate):
+            plate = re.sub(
+                r"^(\d{2}[A-Z])(\d{3})(\d{2})$",
+                r"\1-\2.\3",
+                plate
+            )
+
+        # ✅ Biển 4 số (xe máy cũ)
+        elif re.match(r"^\d{2}[A-Z]\d{4}$", plate):
+            plate = re.sub(
+                r"^(\d{2}[A-Z])(\d{4})$",
+                r"\1-\2",
+                plate
+            )
+
+        # ❗ Không match thì giữ nguyên (tránh làm sai)
+        else:
+            pass
+
+        print(f"DEBUG: plate after format: {plate}")
         if len(plate) < 8:
             _log_ocr(
                 f"merge_ocr_results returning None due to short length: {plate}", "ocr"
@@ -365,6 +391,7 @@ class PaddleOCRWrapper:
             return None
         if "-" not in plate:
             return None
+        _log_ocr(f"merge_ocr_results returning plate: {plate}", "ocr")
         return plate
 
     def _combine_license_plate_results(self, text_results):

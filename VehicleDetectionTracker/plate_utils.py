@@ -444,37 +444,39 @@ def detect_license_plate_sync(
             return {"text": None, "count": num_detections}
 
         # Try OCR with different deskew directions
-        _log(f"[PLATE_DETECT] vehicle_id={track_id} Bắt đầu OCR với các hướng xoay khác nhau...")
         lp = "unknown"
-        for direction in [-1, 1]:  # left, right
-            for center_thres in [0, 1]:
-                try:
-                    deskewed_image = utils_rotate.deskew(
-                        plate_image, direction, center_thres
-                    )
-                    _log(
-                        f"[PLATE_DETECT] vehicle_id={track_id} OCR attempt: direction={direction}, center_thres={center_thres}, deskewed_shape={deskewed_image.shape if deskewed_image is not None else 'None'}"
-                    )
 
-                    with model_lock:
-                        lp = ocr_reader.read_license_plate(deskewed_image)
+        with model_lock:
+            lp = ocr_reader.read_license_plate(plate_image)
+        # for direction in [-1, 1]:  # left, right
+        #     for center_thres in [0, 1]:
+        #         try:
+        #             deskewed_image = utils_rotate.deskew(
+        #                 plate_image, direction, center_thres
+        #             )
+        #             _log(
+        #                 f"[PLATE_DETECT] vehicle_id={track_id} OCR attempt: direction={direction}, center_thres={center_thres}, deskewed_shape={deskewed_image.shape if deskewed_image is not None else 'None'}"
+        #             )
 
-                    _log(
-                        f"[PLATE_DETECT] vehicle_id={track_id} OCR result (direction={direction}, center_thres={center_thres}): '{lp}'"
-                    )
+        #             with model_lock:
+        #                 lp = ocr_reader.read_license_plate(deskewed_image)
 
-                    if lp != "unknown" and lp is not None:
-                        _log(
-                            f"[PLATE_DETECT] vehicle_id={track_id} ✓ Tìm thấy biển số: '{lp}' (direction={direction}, center_thres={center_thres})"
-                        )
-                        return {"text": lp, "count": num_detections}
-                except Exception as ocr_error:
-                    _log(
-                        f"[PLATE_DETECT] vehicle_id={track_id} ⚠ OCR error (direction={direction}, center_thres={center_thres}): {ocr_error}"
-                    )
+        #             _log(
+        #                 f"[PLATE_DETECT] vehicle_id={track_id} OCR result (direction={direction}, center_thres={center_thres}): '{lp}'"
+        #             )
+
+        #             if lp != "unknown" and lp is not None:
+        #                 _log(
+        #                     f"[PLATE_DETECT] vehicle_id={track_id} ✓ Tìm thấy biển số: '{lp}' (direction={direction}, center_thres={center_thres})"
+        #                 )
+        #                 return {"text": lp, "count": num_detections}
+        #         except Exception as ocr_error:
+        #             _log(
+        #                 f"[PLATE_DETECT] vehicle_id={track_id} ⚠ OCR error (direction={direction}, center_thres={center_thres}): {ocr_error}"
+        #             )
 
         _log(
-            f"[PLATE_DETECT] vehicle_id={track_id} ⚠ Không đọc được biển số sau tất cả các lần thử, return: '{lp}'"
+            f"[PLATE_DETECT] vehicle_id={track_id} ✓ Tìm thấy biển số: '{lp}'"
         )
         return {"text": lp, "count": num_detections}
     except Exception as e:

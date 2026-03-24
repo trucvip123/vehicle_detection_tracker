@@ -67,7 +67,16 @@ class PlateProcessor:
 
         # Persistence settings
         self.state_dir = "vehicle_state"  # Directory to store state files
-        self._state_lock = threading.Lock()
+        # ===== THREAD SAFETY ARCHITECTURE =====
+        # _state_lock (RLock): Protects ALL vehicle state dicts during read/write
+        #   - vehicle_plates
+        #   - vehicle_plate_counts
+        #   - vehicle_plate_counts_each_frame
+        #   - vehicle_directions
+        #   - vehicle_last_seen
+        #   - vehicle_detected_plate_images
+        #   Use RLock to allow reentrant locking (same thread can acquire multiple times)
+        self._state_lock = threading.RLock()
         self._last_reset_date = None  # Track last reset date for daily reset
         
         # Create state directory if it doesn't exist
@@ -80,6 +89,57 @@ class PlateProcessor:
         # Load persisted state if it exists
         self._load_state()
 
+    # ===== THREAD-SAFE STATE ACCESS METHODS =====
+    def update_vehicle_state(self, track_id, plate_text=None, direction=None, timestamp=None):
+        """
+        Thread-safe update of vehicle state (plate, direction, last_seen).
+        All updates use _state_lock to prevent race conditions.
+        
+        Args:
+            track_id: Vehicle track ID
+            plate_text: License plate text (optional)
+            direction: Direction label (optional)
+            timestamp: Last seen timestamp (optional)
+        """
+        with self._state_lock:
+            if plate_text is not None:
+                self.vehicle_plates[track_id] = plate_text
+            if direction is not None:
+                self.vehicle_directions[track_id] = direction
+            if timestamp is not None:
+                self.vehicle_last_seen[track_id] = timestamp
+
+    def get_vehicle_state(self, track_id):
+        """
+        Thread-safe read of vehicle state.
+        Returns: (plate_text, direction, last_seen_timestamp) or None for missing track_id
+        """
+        with self._state_lock:
+            plate = self.vehicle_plates.get(track_id)
+            direction = self.vehicle_directions.get(track_id)
+            timestamp = self.vehicle_last_seen.get(track_id)
+        return plate, direction, timestamp
+
+    def get_all_vehicle_ids(self):
+        """Thread-safe access to all tracked vehicle IDs."""
+        with self._state_lock:
+            return set(self.vehicle_plates.keys()) | set(self.vehicle_directions.keys()) | set(self.vehicle_last_seen.keys())
+
+    def get_vehicle_plates_copy(self):
+        """Thread-safe copy of vehicle_plates dict for reading."""
+        with self._state_lock:
+            return self.vehicle_plates.copy()
+
+    def get_vehicle_directions_copy(self):
+        """Thread-safe copy of vehicle_directions dict for reading."""
+        with self._state_lock:
+            return self.vehicle_directions.copy()
+
+    def get_vehicle_last_seen_copy(self):
+        """Thread-safe copy of vehicle_last_seen dict for reading."""
+        with self._state_lock:
+            return self.vehicle_last_seen.copy()
+
     def save_daily_vehicle_summary(self, date_str=None):
         """
         Gửi thông báo Telegram tổng hợp số lượng xe đi vào trong ngày với chi tiết biển số.
@@ -88,14 +148,22 @@ class PlateProcessor:
         """
         from VehicleDetectionTracker.utils.send_bot import send_warning_to_telegram
 
+        # Use thread-safe copy methods to avoid holding lock during summary generation
+        vehicle_plates_copy = self.get_vehicle_plates_copy()
+        vehicle_directions_copy = self.get_vehicle_directions_copy()
+        vehicle_last_seen_copy = self.get_vehicle_last_seen_copy()
+        
+        with self._state_lock:
+            vehicle_plate_counts_copy = self.vehicle_plate_counts.copy()
+
         save_daily_vehicle_summary(
-            self.vehicle_last_seen,
-            self.vehicle_directions,
-            self.vehicle_plates,
+            vehicle_last_seen_copy,
+            vehicle_directions_copy,
+            vehicle_plates_copy,
             self.log,
             send_warning_to_telegram,
             date_str,
-            self.vehicle_plate_counts,
+            vehicle_plate_counts_copy,
         )
 
     def _get_best_vehicle_image_by_plate(self, vehicle_dir, plate_text, track_id):
@@ -328,16 +396,17 @@ class PlateProcessor:
                     self.log(f"[PLATE] vehicle_id={track_id} Vehicle already has notification sent, skipping background processing (stale task)")
                     return
             
-            # Update last_seen timestamp if available
-            if frame_timestamp:
-                self.vehicle_last_seen[track_id] = frame_timestamp
-            
-            # Always update direction if available (not just when plate is detected)
-            if direction_label:
-                self.vehicle_directions[track_id] = direction_label
-                log_plate(track_id, f"direction_set={direction_label}")
-            elif track_id not in self.vehicle_directions:
-                self.vehicle_directions[track_id] = "Unknown"
+            # Update last_seen timestamp and direction (thread-safe)
+            with self._state_lock:
+                if frame_timestamp:
+                    self.vehicle_last_seen[track_id] = frame_timestamp
+                
+                # Always update direction if available (not just when plate is detected)
+                if direction_label:
+                    self.vehicle_directions[track_id] = direction_label
+                    log_plate(track_id, f"direction_set={direction_label}")
+                elif track_id not in self.vehicle_directions:
+                    self.vehicle_directions[track_id] = "Unknown"
 
             # Submit plate detection to inference queue asynchronously
             # This avoids model_lock bottleneck by queuing tasks
@@ -502,18 +571,18 @@ class PlateProcessor:
                     plate_counts = self.vehicle_plate_counts_each_frame[effective_track_id]
                     log_plate(effective_track_id, f"Accumulated plate detection: plate={plate_text}, plate_counts={plate_counts}")
                     
-                    # Set best plate in vehicle_plates if not already set
-                    # First valid plate detected becomes the primary plate for this vehicle
-                    if effective_track_id not in self.vehicle_plates or not self.vehicle_plates[effective_track_id]:
-                        self.vehicle_plates[effective_track_id] = plate_text
-                        self.log(f"[PLATE] vehicle_id={effective_track_id} Set primary plate: {plate_text}")
+                    # # Set best plate in vehicle_plates if not already set
+                    # # First valid plate detected becomes the primary plate for this vehicle
+                    # if effective_track_id not in self.vehicle_plates or not self.vehicle_plates[effective_track_id]:
+                    #     self.vehicle_plates[effective_track_id] = plate_text
+                    #     self.log(f"[PLATE] vehicle_id={effective_track_id} Set primary plate: {plate_text}")
                         
-                        # Also track in vehicle_plate_counts for summary (1 vehicle = 1 count)
-                        if effective_track_id not in self.vehicle_plate_counts:
-                            self.vehicle_plate_counts[effective_track_id] = {}
-                        if plate_text not in self.vehicle_plate_counts[effective_track_id]:
-                            self.vehicle_plate_counts[effective_track_id][plate_text] = 1
-                            self.log(f"[PLATE] vehicle_id={effective_track_id} Added to plate_counts: {plate_text}")
+                    #     # Also track in vehicle_plate_counts for summary (1 vehicle = 1 count)
+                    #     if effective_track_id not in self.vehicle_plate_counts:
+                    #         self.vehicle_plate_counts[effective_track_id] = {}
+                    #     if plate_text not in self.vehicle_plate_counts[effective_track_id]:
+                    #         self.vehicle_plate_counts[effective_track_id][plate_text] = 1
+                    #         self.log(f"[PLATE] vehicle_id={effective_track_id} Added to plate_counts: {plate_text}")
                     
                     # Save vehicle frame for later use in final notification
                     # Store detected frame with plate info in filename
@@ -828,7 +897,8 @@ class PlateProcessor:
         self.log(f"[CLEANUP_NOTIFY] Starting cleanup notifications (fallback for remaining vehicles)...")
         
         # Get all vehicles that have ever been tracked
-        all_vehicle_ids = set(self.vehicle_plates.keys()) | set(self.vehicle_directions.keys()) | set(self.vehicle_last_seen.keys())
+        # Get all vehicle IDs (thread-safe)
+        all_vehicle_ids = self.get_all_vehicle_ids()
         
         # First pass: check for vehicles with pending tasks
         vehicles_with_pending = []
@@ -887,8 +957,9 @@ class PlateProcessor:
                 with self._task_count_lock:
                     remaining_tasks = self.vehicle_pending_task_count.get(track_id, 0)
                 
-                # Check if vehicle has plate data (from completed detection tasks)
-                has_plate_data = track_id in self.vehicle_plates and self.vehicle_plates[track_id]
+                # Check if vehicle has plate data (from completed detection tasks - thread-safe)
+                with self._state_lock:
+                    has_plate_data = track_id in self.vehicle_plates and self.vehicle_plates[track_id]
                 
                 if remaining_tasks == 0:
                     status = "(all tasks completed via callback)"
@@ -904,12 +975,13 @@ class PlateProcessor:
                 if track_id not in self.vehicle_plates or not self.vehicle_plates[track_id]:
                     self.log(f"[CLEANUP_NOTIFY] vehicle_id={track_id} Warning: vehicle_plates not set, no plate to send in notification")
                 
-                # Find vehicle_dir from vehicle_last_seen
+                # Find vehicle_dir from vehicle_last_seen (thread-safe)
                 vehicle_dir = None
                 # Try to find the directory pattern: screenshots/YYYYMMDD/HHMM_track_id
                 import glob
-                if track_id in self.vehicle_last_seen:
-                    date_str = self.vehicle_last_seen[track_id].strftime("%Y%m%d")
+                vehicle_last_seen_copy = self.get_vehicle_last_seen_copy()
+                if track_id in vehicle_last_seen_copy:
+                    date_str = vehicle_last_seen_copy[track_id].strftime("%Y%m%d")
                     pattern = f"screenshots/{date_str}/*_{track_id}"
                     matching_dirs = glob.glob(pattern)
                     if matching_dirs:
@@ -952,8 +1024,10 @@ class PlateProcessor:
                 return False
         
         try:
-            direction_label = self.vehicle_directions.get(track_id, "Unknown")
-            frame_timestamp = self.vehicle_last_seen.get(track_id)
+            # Get vehicle state (thread-safe)
+            plate_text_current, direction_label, frame_timestamp = self.get_vehicle_state(track_id)
+            if direction_label is None:
+                direction_label = "Unknown"
             
             # Check if direction is entering (must contain "bottom")
             is_entering = direction_label and "bottom" in direction_label.lower()
@@ -962,6 +1036,22 @@ class PlateProcessor:
                 return False
             
             plate_text = self.get_most_detected_plate(track_id)[0]  # Get the best plate detected for this vehicle
+            
+            # Set best plate in vehicle_plates if not already set (thread-safe)
+            # First valid plate detected becomes the primary plate for this vehicle
+            with self._state_lock:
+                if track_id not in self.vehicle_plates or not self.vehicle_plates[track_id]:
+                    self.vehicle_plates[track_id] = plate_text
+                    self.log(f"[PLATE] vehicle_id={track_id} Set primary plate: {plate_text}")
+                    
+                    # Also track in vehicle_plate_counts for summary (1 vehicle = 1 count)
+                    if track_id not in self.vehicle_plate_counts:
+                        self.vehicle_plate_counts[track_id] = {}
+                    if plate_text not in self.vehicle_plate_counts[track_id]:
+                        self.vehicle_plate_counts[track_id][plate_text] = 1
+                        self.log(f"[PLATE] vehicle_id={track_id} Added to plate_counts: {plate_text}")
+            
+            
             notification_sent = False
             
             # Case 1: Plate detected
@@ -1100,28 +1190,29 @@ class PlateProcessor:
             self.log(f"[PERSIST] Failed to load state: {e}")
 
     def check_and_reset_daily_tracking(self):
-        """Check if it's a new day and reset tracking data if needed."""
+        """Check if it's a new day and reset tracking data if needed (thread-safe)."""
         today_str = datetime.now().strftime("%Y%m%d")
         
         # If last reset date is different from today, do daily reset
         if self._last_reset_date != today_str:
-            self._last_reset_date = today_str
-            self.log(f"[DAILY_RESET] Resetting daily tracking for {today_str}")
-            
-            # Clear all daily tracking data (fresh start for new day)
-            self.vehicle_plates.clear()
-            self.vehicle_plate_counts.clear()
-            self.vehicle_plate_counts_each_frame.clear()
-            self.vehicle_directions.clear()
-            self.vehicle_last_seen.clear()
-            self.vehicle_detected_plate_images.clear()
-            self.vehicle_pending_futures.clear()
-            self.vehicle_pending_task_count.clear()
-            self._vehicles_without_plate_logged.clear()
-            
-            reset_daily_tracking()  # Reset telegram notification tracking
-            
-            self.log(f"[DAILY_RESET] ✓ All daily tracking data reset for new day")
+            with self._state_lock:
+                self._last_reset_date = today_str
+                self.log(f"[DAILY_RESET] Resetting daily tracking for {today_str}")
+                
+                # Clear all daily tracking data (fresh start for new day)
+                self.vehicle_plates.clear()
+                self.vehicle_plate_counts.clear()
+                self.vehicle_plate_counts_each_frame.clear()
+                self.vehicle_directions.clear()
+                self.vehicle_last_seen.clear()
+                self.vehicle_detected_plate_images.clear()
+                self.vehicle_pending_futures.clear()
+                self.vehicle_pending_task_count.clear()
+                self._vehicles_without_plate_logged.clear()
+                
+                reset_daily_tracking()  # Reset telegram notification tracking
+                
+                self.log(f"[DAILY_RESET] ✓ All daily tracking data reset for new day")
 
     def _save_state(self):
         """Save vehicle state to JSON file for persistence (one file per day)."""
@@ -1206,10 +1297,11 @@ class PlateProcessor:
             plate_summary = {}
             for track_id in vehicles_today:
                 plate_text = self.vehicle_plates.get(track_id, "?")
-                if plate_text == "?":
+                if plate_text == "?" or plate_text is None:  # ✅ Also skip None
                     # Only log once per vehicle to avoid spam in logs
                     if track_id not in self._vehicles_without_plate_logged:
-                        self.log(f"[SUMMARY] vehicle_id={track_id} missing from vehicle_plates (plate detection not complete yet)")
+                        missing_reason = "plate=None" if plate_text is None else "not in vehicle_plates"
+                        self.log(f"[SUMMARY] vehicle_id={track_id} missing plate ({missing_reason})")
                         self._vehicles_without_plate_logged.add(track_id)
                     continue
                     
