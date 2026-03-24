@@ -6,6 +6,8 @@ import glob
 import cv2
 from datetime import datetime
 from collections import defaultdict
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+import numpy as np
 from VehicleDetectionTracker.config_loader import (
     get_detection_config,
     get_tracking_config,
@@ -16,7 +18,7 @@ from VehicleDetectionTracker.tracking_utils import map_direction_to_label
 class FrameProcessor:
     """Handles vehicle detection and tracking in frames."""
 
-    def __init__(self, model, log_func):
+    def __init__(self, model: Any, log_func: Callable[[str], None]) -> None:
         self.model = model
         self.log = log_func
 
@@ -43,7 +45,7 @@ class FrameProcessor:
         self._vehicle_timeout = 300  # Remove vehicles not seen for 5 minutes (300s)
         self._last_cleanup_state = (0, 0)  # Track previous (total_vehicles, total_positions) to only log when changed
 
-    def process_frame_streaming(self, frame, frame_timestamp, plate_processor):
+    def process_frame_streaming(self, frame: np.ndarray, frame_timestamp: datetime, plate_processor: Any) -> np.ndarray:
         """
         Optimized frame processing for streaming: Fast detection, background OCR.
         Only shows license plates in corner, no bounding boxes on vehicles.
@@ -247,7 +249,7 @@ class FrameProcessor:
         
         return frame
     
-    def _cleanup_old_vehicle_data(self, current_timestamp, plate_processor):
+    def _cleanup_old_vehicle_data(self, current_timestamp: datetime, plate_processor: Any) -> None:
         """
         Periodically clean up old vehicle data from memory to prevent memory leaks.
         Removes vehicles that haven't been seen for more than _vehicle_timeout seconds.

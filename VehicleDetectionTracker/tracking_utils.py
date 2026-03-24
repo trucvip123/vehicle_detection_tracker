@@ -3,9 +3,11 @@ Utilities for vehicle tracking, speed calculation and direction estimation.
 """
 
 import math
+from typing import Dict, List, Tuple, Optional, Any
+from datetime import datetime
 
 
-def map_direction_to_label(direction):
+def map_direction_to_label(direction: float) -> str:
     """Map direction angle to human-readable label."""
     direction_ranges = {
         (-math.pi / 8, math.pi / 8): "Right",
@@ -23,7 +25,7 @@ def map_direction_to_label(direction):
     return "Unknown"
 
 
-def calculate_speed_and_direction(timestamps, positions):
+def calculate_speed_and_direction(timestamps: List[datetime], positions: List[Tuple[float, float]]) -> Dict[str, Any]:
     """
     Calculate speed and direction from position history.
 
@@ -77,12 +79,12 @@ def calculate_speed_and_direction(timestamps, positions):
     }
 
 
-def convert_mps_to_kmph(meters_per_second):
+def convert_mps_to_kmph(meters_per_second: float) -> float:
     """Convert speed from m/s to km/h."""
     return meters_per_second * 3.6
 
 
-def update_tracking_history(track_history, track_id, x, y, max_history=30):
+def update_tracking_history(track_history: Dict[int, List[Tuple[float, float]]], track_id: int, x: float, y: float, max_history: int = 30) -> None:
     """
     Update tracking history for a vehicle.
 

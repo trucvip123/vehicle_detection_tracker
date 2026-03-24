@@ -5,19 +5,20 @@ Image processing utilities for vehicle detection and tracking.
 import cv2
 import base64
 import numpy as np
+from typing import Optional, Dict, Any, Callable
 
 # Try to import logging utility
 try:
     from VehicleDetectionTracker.logging_utils import log as _log_image
 except ImportError:
 
-    def _log_image(message, category="image"):
+    def _log_image(message: str, category: str = "image") -> None:
         print(
             f"[{__import__('datetime').datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {message}"
         )
 
 
-def encode_image_base64(image):
+def encode_image_base64(image: np.ndarray) -> str:
     """
     Encode an image as base64.
 
@@ -32,7 +33,7 @@ def encode_image_base64(image):
     return image_base64
 
 
-def decode_image_base64(image_base64):
+def decode_image_base64(image_base64: str) -> Optional[np.ndarray]:
     """
     Decode a base64-encoded image.
 
@@ -52,7 +53,7 @@ def decode_image_base64(image_base64):
         return None
 
 
-def increase_brightness(image, factor=1.5):
+def increase_brightness(image: np.ndarray, factor: float = 1.5) -> np.ndarray:
     """
     Increases the brightness of an image.
 
@@ -66,7 +67,7 @@ def increase_brightness(image, factor=1.5):
     return cv2.convertScaleAbs(image, alpha=factor, beta=0)
 
 
-def draw_tracking_line(frame, points, color, thickness=2):
+def draw_tracking_line(frame: np.ndarray, points: np.ndarray, color: tuple, thickness: int = 2) -> None:
     """
     Draw tracking line on frame.
 
@@ -102,7 +103,7 @@ def draw_license_plate(frame, box, text, color=(0, 255, 0), text_color=(0, 0, 25
         )
 
 
-def draw_plates_corner(frame, plates_dict):
+def draw_plates_corner(frame: np.ndarray, plates_dict: Dict[int, str]) -> np.ndarray:
     """
     Draw detected license plates in corner of frame.
 

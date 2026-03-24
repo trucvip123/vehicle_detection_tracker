@@ -6,7 +6,8 @@ import cv2
 import json
 import os
 from pathlib import Path
-from concurrent.futures import wait, ALL_COMPLETED
+from concurrent.futures import ThreadPoolExecutor, wait, ALL_COMPLETED
+from typing import Dict, Set, Optional, Tuple, Callable, Any, List
 from VehicleDetectionTracker.plate_utils import (
     detect_license_plate_sync,
     submit_plate_detection_async,
@@ -27,14 +28,14 @@ _vehicle_telegram_sent_without_plate = set()  # Vehicles that sent notification 
 _vehicle_telegram_sent_lock = threading.RLock()  # RLock to allow reentrant locking
 
 
-def reset_telegram_sent():
+def reset_telegram_sent() -> None:
     """Reset the telegram sent tracking set."""
     global _vehicle_telegram_sent_with_plate, _vehicle_telegram_sent_without_plate
     _vehicle_telegram_sent_with_plate.clear()
     _vehicle_telegram_sent_without_plate.clear()
 
 
-def reset_daily_tracking():
+def reset_daily_tracking() -> None:
     """Reset daily tracking data (to be called at midnight or start of new day)."""
     reset_telegram_sent()
 
@@ -42,7 +43,13 @@ def reset_daily_tracking():
 class PlateProcessor:
     """Handles license plate detection and tracking."""
 
-    def __init__(self, plate_model, ocr_reader, executor, log_func):
+    def __init__(
+        self, 
+        plate_model: Any, 
+        ocr_reader: Any, 
+        executor: ThreadPoolExecutor, 
+        log_func: Callable[[str], None]
+    ) -> None:
         self.plate_model = plate_model
         self.ocr_reader = ocr_reader
         self.executor = executor
@@ -90,7 +97,13 @@ class PlateProcessor:
         self._load_state()
 
     # ===== THREAD-SAFE STATE ACCESS METHODS =====
-    def update_vehicle_state(self, track_id, plate_text=None, direction=None, timestamp=None):
+    def update_vehicle_state(
+        self, 
+        track_id: int, 
+        plate_text: Optional[str] = None, 
+        direction: Optional[str] = None, 
+        timestamp: Optional[datetime] = None
+    ) -> None:
         """
         Thread-safe update of vehicle state (plate, direction, last_seen).
         All updates use _state_lock to prevent race conditions.
@@ -109,7 +122,7 @@ class PlateProcessor:
             if timestamp is not None:
                 self.vehicle_last_seen[track_id] = timestamp
 
-    def get_vehicle_state(self, track_id):
+    def get_vehicle_state(self, track_id: int) -> Tuple[Optional[str], Optional[str], Optional[datetime]]:
         """
         Thread-safe read of vehicle state.
         Returns: (plate_text, direction, last_seen_timestamp) or None for missing track_id
@@ -120,27 +133,27 @@ class PlateProcessor:
             timestamp = self.vehicle_last_seen.get(track_id)
         return plate, direction, timestamp
 
-    def get_all_vehicle_ids(self):
+    def get_all_vehicle_ids(self) -> Set[int]:
         """Thread-safe access to all tracked vehicle IDs."""
         with self._state_lock:
             return set(self.vehicle_plates.keys()) | set(self.vehicle_directions.keys()) | set(self.vehicle_last_seen.keys())
 
-    def get_vehicle_plates_copy(self):
+    def get_vehicle_plates_copy(self) -> Dict[int, str]:
         """Thread-safe copy of vehicle_plates dict for reading."""
         with self._state_lock:
             return self.vehicle_plates.copy()
 
-    def get_vehicle_directions_copy(self):
+    def get_vehicle_directions_copy(self) -> Dict[int, str]:
         """Thread-safe copy of vehicle_directions dict for reading."""
         with self._state_lock:
             return self.vehicle_directions.copy()
 
-    def get_vehicle_last_seen_copy(self):
+    def get_vehicle_last_seen_copy(self) -> Dict[int, datetime]:
         """Thread-safe copy of vehicle_last_seen dict for reading."""
         with self._state_lock:
             return self.vehicle_last_seen.copy()
 
-    def save_daily_vehicle_summary(self, date_str=None):
+    def save_daily_vehicle_summary(self, date_str: Optional[str] = None) -> None:
         """
         Gửi thông báo Telegram tổng hợp số lượng xe đi vào trong ngày với chi tiết biển số.
         Args:
@@ -166,7 +179,12 @@ class PlateProcessor:
             vehicle_plate_counts_copy,
         )
 
-    def _get_best_vehicle_image_by_plate(self, vehicle_dir, plate_text, track_id):
+    def _get_best_vehicle_image_by_plate(
+        self, 
+        vehicle_dir: str, 
+        plate_text: str, 
+        track_id: int
+    ) -> Optional[str]:
         """
         Get the best vehicle image that matches the detected plate.
         Priority:
@@ -270,7 +288,7 @@ class PlateProcessor:
             self.log(f"[IMAGE_SELECT] vehicle_id={track_id} error finding image: {e}")
             return None
 
-    def _get_first_vehicle_image(self, vehicle_dir, track_id):
+    def _get_first_vehicle_image(self, vehicle_dir: str, track_id: int) -> Optional[str]:
         """
         Get the first image file from the vehicle directory.
         Used as fallback when no plates detected.
@@ -318,7 +336,7 @@ class PlateProcessor:
             self.log(f"[PLATE] vehicle_id={track_id} error finding image: {e}")
             return None
 
-    def get_most_detected_plate(self, track_id):
+    def get_most_detected_plate(self, track_id: int) -> Tuple[str, int]:
         """
         Get the license plate with highest detection count for a vehicle.
 
@@ -339,7 +357,7 @@ class PlateProcessor:
         most_detected_plate = max(reversed(plate_counts.items()), key=lambda x: x[1])  # In case of tie, get the most recently added plate
         return most_detected_plate
 
-    def _sanitize_filename(self, filename):
+    def _sanitize_filename(self, filename: str) -> str:
         """
         Sanitize filename by removing/replacing invalid characters.
         
@@ -359,13 +377,13 @@ class PlateProcessor:
 
     def process_plate_background_sync(
         self,
-        track_id,
-        vehicle_frame,
-        direction_label=None,
-        frame_timestamp=None,
-        timestamp_str=None,
-        vehicle_dir="screenshots",
-    ):
+        track_id: int,
+        vehicle_frame: Any,
+        direction_label: Optional[str] = None,
+        frame_timestamp: Optional[datetime] = None,
+        timestamp_str: Optional[str] = None,
+        vehicle_dir: str = "screenshots",
+    ) -> None:
         """
         Sync wrapper for background plate processing using ThreadPoolExecutor.
         Tracks license plate detection counts.
@@ -696,7 +714,7 @@ class PlateProcessor:
             # Add callback to be called when task completes
             future.add_done_callback(lambda f: self._on_plate_task_complete(track_id, vehicle_dir))
 
-    def _on_plate_task_complete(self, track_id, vehicle_dir):
+    def _on_plate_task_complete(self, track_id: int, vehicle_dir: str) -> None:
         """
         Callback called when a background plate detection task completes (executor task).
         Decrements executor task count when all tasks for this vehicle are done.
@@ -763,7 +781,7 @@ class PlateProcessor:
                     self.vehicle_pending_queue_tasks.pop(track_id, None)
                     self.log(f"[TASK_COMPLETE] vehicle_id={track_id} Cleaned up all pending task counts")
 
-    def wait_pending_tasks_for_vehicle(self, track_id, timeout=30):
+    def wait_pending_tasks_for_vehicle(self, track_id: int, timeout: int = 30) -> bool:
         """
         Wait for all pending background tasks (futures) for a vehicle to complete.
         
@@ -801,7 +819,7 @@ class PlateProcessor:
             self.log(f"[WAIT_TASKS] vehicle_id={track_id} Error waiting for tasks: {e}")
             return False
 
-    def wait_all_background_tasks(self, timeout=60):
+    def wait_all_background_tasks(self, timeout: int = 60) -> bool:
         """
         Wait for ALL pending background tasks for all vehicles to complete.
         This is called during cleanup to ensure all notifications are sent.
@@ -885,7 +903,7 @@ class PlateProcessor:
             self.log(f"[WAIT_ALL_TASKS] ✓ All background tasks completed successfully")
             return True
 
-    def send_notifications_for_completed_vehicles(self):
+    def send_notifications_for_completed_vehicles(self) -> None:
         """
         Send notifications for any remaining vehicles that haven't been notified yet.
         This is called during cleanup when video ends (fallback for vehicles with pending tasks).
@@ -1000,7 +1018,7 @@ class PlateProcessor:
         else:
             self.log(f"[CLEANUP_NOTIFY] ✓ Cleanup notification complete ({not_notified_count} vehicles processed)")
 
-    def send_final_vehicle_notification(self, track_id, vehicle_dir=None):
+    def send_final_vehicle_notification(self, track_id: int, vehicle_dir: Optional[str] = None) -> bool:
         """
         Send final notification for a vehicle after all detections are aggregated.
         This is called when vehicle disappears (missing_frames exceeds threshold).
@@ -1124,7 +1142,7 @@ class PlateProcessor:
             self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} Traceback: {traceback.format_exc()}")
             return False
 
-    def _get_state_file_path(self, date_str=None):
+    def _get_state_file_path(self, date_str: Optional[str] = None) -> str:
         """
         Get the state file path for a specific date.
         
@@ -1138,7 +1156,7 @@ class PlateProcessor:
             date_str = datetime.now().strftime("%Y%m%d")
         return os.path.join(self.state_dir, f"vehicle_state_{date_str}.json")
 
-    def _load_state(self):
+    def _load_state(self) -> None:
         """Load vehicle state from persisted JSON file for today only."""
         try:
             state_file = self._get_state_file_path()
@@ -1189,7 +1207,7 @@ class PlateProcessor:
         except Exception as e:
             self.log(f"[PERSIST] Failed to load state: {e}")
 
-    def check_and_reset_daily_tracking(self):
+    def check_and_reset_daily_tracking(self) -> None:
         """Check if it's a new day and reset tracking data if needed (thread-safe)."""
         today_str = datetime.now().strftime("%Y%m%d")
         
@@ -1214,7 +1232,7 @@ class PlateProcessor:
                 
                 self.log(f"[DAILY_RESET] ✓ All daily tracking data reset for new day")
 
-    def _save_state(self):
+    def _save_state(self) -> None:
         """Save vehicle state to JSON file for persistence (one file per day)."""
         try:
             self.log(f"[PERSIST] _save_state: Attempting to acquire lock...")
@@ -1272,7 +1290,7 @@ class PlateProcessor:
             import traceback
             self.log(f"[PERSIST] Traceback: {traceback.format_exc()}")
 
-    def get_today_vehicles_summary(self):
+    def get_today_vehicles_summary(self) -> Dict[str, Any]:
         """
         Get summary of vehicles (plates and counts) from today's tracking data.
         

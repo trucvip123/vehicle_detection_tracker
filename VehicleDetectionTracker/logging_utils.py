@@ -3,16 +3,17 @@
 import os
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 
-def _ensure_log_dir():
+def _ensure_log_dir() -> Path:
     """Ensure logs directory exists."""
     log_dir = Path("logs")
     log_dir.mkdir(exist_ok=True)
     return log_dir
 
 
-def _write_to_log_file(message, log_category="app"):
+def _write_to_log_file(message: str, log_category: str = "app") -> None:
     """Write log message to single daily log file (all messages in one file per day)."""
     try:
         log_dir = _ensure_log_dir()
@@ -25,7 +26,7 @@ def _write_to_log_file(message, log_category="app"):
         print(f"Error writing to log file: {e}")
 
 
-def log(message, category="app"):
+def log(message: str, category: str = "app") -> None:
     """
     Print log message with datetime timestamp and save to single daily log file.
 
@@ -43,7 +44,7 @@ def log(message, category="app"):
     _write_to_log_file(log_message)
 
 
-def log_plate(track_id, message, category="plate"):
+def log_plate(track_id: int, message: str, category: str = "plate") -> None:
     """
     Print plate processing log message with track_id for easy identification.
 

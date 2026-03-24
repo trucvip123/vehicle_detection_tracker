@@ -3,18 +3,20 @@
 import os
 import pandas as pd
 import threading
+from typing import Callable, Any
+from datetime import datetime
 
 
 class ExcelManager:
     """Thread-safe Excel file manager."""
 
-    def __init__(self, excel_output_path, log_func):
+    def __init__(self, excel_output_path: str, log_func: Callable[[str], None]) -> None:
         self.excel_output_path = excel_output_path
         self._excel_lock = threading.Lock()
         self.log = log_func
         self._initialize_excel_file()
 
-    def _initialize_excel_file(self):
+    def _initialize_excel_file(self) -> None:
         """Initialize Excel file with headers if it doesn't exist."""
         if not os.path.exists(self.excel_output_path):
             df = pd.DataFrame(
@@ -23,7 +25,7 @@ class ExcelManager:
             df.to_excel(self.excel_output_path, index=False, engine="openpyxl")
             self.log(f"Created Excel file: {self.excel_output_path}")
 
-    def save_to_excel(self, vehicle_id, license_plate, direction_label, timestamp):
+    def save_to_excel(self, vehicle_id: int, license_plate: str, direction_label: str, timestamp: datetime) -> None:
         """
         Save vehicle data to Excel file (thread-safe).
         Only saves once per vehicle_id.

@@ -1,9 +1,10 @@
 """Vehicle summary and reporting utilities."""
 
 from datetime import datetime
+from typing import Optional, Dict, Any, Callable, Union
 
 
-def levenshtein_distance(s1, s2):
+def levenshtein_distance(s1: Optional[str], s2: Optional[str]) -> Union[int, float]:
     """
     Calculate the Levenshtein distance between two strings.
     Used to identify similar license plates (differ by 1-2 characters).
@@ -38,7 +39,7 @@ def levenshtein_distance(s1, s2):
     return previous_row[-1]
 
 
-def merge_similar_plates(plate_summary, log_func=None):
+def merge_similar_plates(plate_summary: Dict[str, int], log_func: Optional[Callable[[str], None]] = None) -> Dict[str, int]:
     THRESHOLD = 2  # Merge plates that differ by up to 2 characters
     plates = list(plate_summary.keys())
 
@@ -76,7 +77,7 @@ def merge_similar_plates(plate_summary, log_func=None):
     return result
 
 
-def get_today_vehicles_summary(vehicle_last_seen, vehicle_directions, vehicle_plates, log_func=None):
+def get_today_vehicles_summary(vehicle_last_seen: Dict[int, datetime], vehicle_directions: Dict[int, str], vehicle_plates: Dict[int, str], log_func: Optional[Callable[[str], None]] = None) -> list:
     """
     Get summary of vehicles (plates and counts) from today's tracking data.
     
@@ -126,14 +127,14 @@ def get_today_vehicles_summary(vehicle_last_seen, vehicle_directions, vehicle_pl
 
 
 def save_daily_vehicle_summary(
-    vehicle_last_seen,
-    vehicle_directions,
-    vehicle_plates,
-    log_func,
-    send_telegram_func,
-    date_str=None,
-    vehicle_plate_counts=None,
-):
+    vehicle_last_seen: Dict[int, datetime],
+    vehicle_directions: Dict[int, str],
+    vehicle_plates: Dict[int, str],
+    log_func: Callable[[str], None],
+    send_telegram_func: Callable[[str, Optional[str]], None],
+    date_str: Optional[str] = None,
+    vehicle_plate_counts: Optional[Dict[int, Dict[str, int]]] = None,
+) -> None:
     """
     Send Telegram notification with summary of vehicles that entered today with license plate details.
     

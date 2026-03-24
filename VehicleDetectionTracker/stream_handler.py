@@ -6,7 +6,9 @@ import os
 import sys
 import logging
 import torch
-from datetime import datetime
+from datetime import datetime, timedelta
+from typing import Any, Callable, Optional, Tuple, Union
+import numpy as np
 from VehicleDetectionTracker.config_loader import get_rtsp_config
 from VehicleDetectionTracker.time_scheduler import (
     is_outside_operating_hours,
@@ -26,10 +28,10 @@ logging.getLogger("cv2").setLevel(logging.WARNING)
 
 # Redirect stderr to suppress FFmpeg codec messagesân
 class NullWriter:
-    def write(self, s):
+    def write(self, s: str) -> None:
         pass
 
-    def flush(self):
+    def flush(self) -> None:
         pass
 
 
@@ -39,13 +41,13 @@ _original_stderr = sys.stderr
 class StreamHandler:
     """Handles video/camera stream processing."""
 
-    def __init__(self, log_func, plate_processor=None):
+    def __init__(self, log_func: Callable[[str], None], plate_processor: Optional[Any] = None) -> None:
         self.log = log_func
         self.plate_processor = plate_processor
         self._stream_notify_sent = False
         self._last_daily_summary_date = None  # Track last date daily summary was sent (YYYYMMDD format)
 
-    def create_capture(self, video_path):
+    def create_capture(self, video_path: Union[str, int]) -> cv2.VideoCapture:
         """Create VideoCapture with GPU hardware decoding for RTSP streams."""
         # Suppress FFmpeg warnings during VideoCapture creation
         sys.stderr = NullWriter()
@@ -74,14 +76,14 @@ class StreamHandler:
 
     def process_video_stream(
         self,
-        video_path,
-        frame_processor,
-        plate_processor,
-        display_window=True,
-        stream_frame_size=None,
-        max_reconnect_attempts=None,
-        reconnect_delay=None,
-    ):
+        video_path: Union[str, int],
+        frame_processor: Any,
+        plate_processor: Any,
+        display_window: bool = True,
+        stream_frame_size: Optional[Tuple[int, int]] = None,
+        max_reconnect_attempts: Optional[int] = None,
+        reconnect_delay: Optional[int] = None,
+    ) -> None:
         """
         Process video/camera stream with optimized performance and auto-reconnect.
 

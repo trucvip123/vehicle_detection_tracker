@@ -1,9 +1,10 @@
 """Device utilities for GPU/CPU management."""
 
 import torch
+from typing import Tuple, Optional, Callable
 
 
-def check_cuda_available():
+def check_cuda_available() -> Tuple[bool, int, Optional[str]]:
     """Kiểm tra xem CUDA có sẵn và có GPU không"""
     cuda_available = torch.cuda.is_available()
     if cuda_available:
@@ -13,7 +14,7 @@ def check_cuda_available():
     return False, 0, None
 
 
-def get_device(log_func):
+def get_device(log_func: Callable[[str], None]) -> Tuple[torch.device, bool]:
     """Trả về device phù hợp (cuda hoặc cpu)"""
     if torch.cuda.is_available():
         device = torch.device("cuda")

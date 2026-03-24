@@ -1,0 +1,338 @@
+﻿============================= test session starts =============================
+platform win32 -- Python 3.13.9, pytest-9.0.2, pluggy-1.5.0 -- C:\ProgramData\miniconda3\python.exe
+cachedir: .pytest_cache
+rootdir: D:\TrucNV\vehicle_detection_tracker
+plugins: anyio-4.11.0
+collecting ... collected 118 items
+
+tests/test_device_utils.py::TestCheckCudaAvailable::test_check_cuda_available_when_cuda_present FAILED [  0%]
+tests/test_device_utils.py::TestCheckCudaAvailable::test_check_cuda_not_available PASSED [  1%]
+tests/test_device_utils.py::TestCheckCudaAvailable::test_check_cuda_returns_tuple FAILED [  2%]
+tests/test_device_utils.py::TestGetDevice::test_get_device_with_gpu FAILED [  3%]
+tests/test_device_utils.py::TestGetDevice::test_get_device_without_gpu FAILED [  4%]
+tests/test_device_utils.py::TestGetPreferredDevice::test_device_preference_order FAILED [  5%]
+tests/test_frame_processor.py::TestFrameProcessorInitialization::test_initialization_with_valid_model FAILED [  5%]
+tests/test_frame_processor.py::TestFrameProcessorInitialization::test_initialization_with_confidence FAILED [  6%]
+tests/test_frame_processor.py::TestProcessFrameStreaming::test_process_frame_streaming_with_valid_input ERROR [  7%]
+tests/test_frame_processor.py::TestProcessFrameStreaming::test_process_frame_streaming_calls_model_track ERROR [  8%]
+tests/test_frame_processor.py::TestProcessFrameStreaming::test_process_frame_streaming_handles_no_detections ERROR [  9%]
+tests/test_frame_processor.py::TestProcessFrameStreaming::test_process_frame_streaming_preserves_frame_shape ERROR [ 10%]
+tests/test_frame_processor.py::TestDirectionCalculation::test_process_frame_calculates_direction ERROR [ 11%]
+tests/test_frame_processor.py::TestCleanupOldVehicleData::test_cleanup_removes_old_vehicles ERROR [ 11%]
+tests/test_frame_processor.py::TestCleanupOldVehicleData::test_cleanup_preserves_recent_vehicles ERROR [ 12%]
+tests/test_frame_processor.py::TestCleanupOldVehicleData::test_cleanup_calls_update_vehicle_state ERROR [ 13%]
+tests/test_frame_processor.py::TestVehicleStateManagement::test_updates_vehicle_timestamp ERROR [ 14%]
+tests/test_frame_processor.py::TestVehicleStateManagement::test_handles_multiple_vehicles ERROR [ 15%]
+tests/test_frame_processor.py::TestFrameProcessorEdgeCases::test_process_frame_with_very_dark_frame ERROR [ 16%]
+tests/test_frame_processor.py::TestFrameProcessorEdgeCases::test_process_frame_with_very_bright_frame ERROR [ 16%]
+tests/test_frame_processor.py::TestFrameProcessorEdgeCases::test_process_frame_with_different_sizes ERROR [ 17%]
+tests/test_image_processing.py::TestEncodeImageBase64::test_encode_image_base64_valid_image PASSED [ 18%]
+tests/test_image_processing.py::TestEncodeImageBase64::test_encode_image_base64_returns_string PASSED [ 19%]
+tests/test_image_processing.py::TestEncodeImageBase64::test_encode_image_base64_empty_image PASSED [ 20%]
+tests/test_image_processing.py::TestDecodeImageBase64::test_decode_image_base64_valid_input PASSED [ 21%]
+tests/test_image_processing.py::TestDecodeImageBase64::test_decode_image_base64_returns_numpy_array PASSED [ 22%]
+tests/test_image_processing.py::TestIncreaseBrightness::test_increase_brightness_valid_input PASSED [ 22%]
+tests/test_image_processing.py::TestIncreaseBrightness::test_increase_brightness_decrease PASSED [ 23%]
+tests/test_image_processing.py::TestIncreaseBrightness::test_increase_brightness_no_change PASSED [ 24%]
+tests/test_image_processing.py::TestIncreaseBrightness::test_increase_brightness_clamps_values PASSED [ 25%]
+tests/test_image_processing.py::TestIncreaseBrightness::test_increase_brightness_preserves_shape PASSED [ 26%]
+tests/test_image_processing.py::TestDrawLicensePlate::test_draw_license_plate_with_valid_inputs PASSED [ 27%]
+tests/test_logging_utils.py::TestEnsureLogDir::test_ensure_log_dir_creates_logs_folder PASSED [ 27%]
+tests/test_logging_utils.py::TestEnsureLogDir::test_ensure_log_dir_returns_path PASSED [ 28%]
+tests/test_logging_utils.py::TestWriteToLogFile::test_write_to_log_file_success FAILED [ 29%]
+tests/test_logging_utils.py::TestWriteToLogFile::test_write_to_log_file_appends_message PASSED [ 30%]
+tests/test_logging_utils.py::TestWriteToLogFile::test_write_to_log_file_handles_errors PASSED [ 31%]
+tests/test_logging_utils.py::TestLog::test_log_prints_message PASSED     [ 32%]
+tests/test_logging_utils.py::TestLog::test_log_includes_timestamp PASSED [ 33%]
+tests/test_logging_utils.py::TestLog::test_log_with_different_categories PASSED [ 33%]
+tests/test_logging_utils.py::TestLogPlate::test_log_plate_includes_track_id PASSED [ 34%]
+tests/test_logging_utils.py::TestLogPlate::test_log_plate_includes_message PASSED [ 35%]
+tests/test_logging_utils.py::TestLogPlate::test_log_plate_with_different_track_ids PASSED [ 36%]
+tests/test_plate_processor.py::TestPlateProcessorInitialization::test_initialization_creates_state_lock FAILED [ 37%]
+tests/test_plate_processor.py::TestPlateProcessorInitialization::test_initialization_creates_state_dicts FAILED [ 38%]
+tests/test_plate_processor.py::TestThreadSafeStateMethods::test_update_vehicle_state_sets_plate ERROR [ 38%]
+tests/test_plate_processor.py::TestThreadSafeStateMethods::test_update_vehicle_state_sets_direction ERROR [ 39%]
+tests/test_plate_processor.py::TestThreadSafeStateMethods::test_update_vehicle_state_sets_timestamp ERROR [ 40%]
+tests/test_plate_processor.py::TestThreadSafeStateMethods::test_update_vehicle_state_atomic_update ERROR [ 41%]
+tests/test_plate_processor.py::TestThreadSafeStateMethods::test_get_vehicle_state_returns_tuple ERROR [ 42%]
+tests/test_plate_processor.py::TestThreadSafeStateMethods::test_get_vehicle_state_nonexistent_vehicle ERROR [ 43%]
+tests/test_plate_processor.py::TestThreadSafeStateMethods::test_get_all_vehicle_ids_copy ERROR [ 44%]
+tests/test_plate_processor.py::TestThreadSafeStateMethods::test_get_vehicle_plates_copy ERROR [ 44%]
+tests/test_plate_processor.py::TestThreadSafety::test_concurrent_updates_no_race_condition ERROR [ 45%]
+tests/test_plate_processor.py::TestThreadSafety::test_concurrent_reads_no_race_condition ERROR [ 46%]
+tests/test_plate_processor.py::TestThreadSafety::test_concurrent_read_write_no_deadlock ERROR [ 47%]
+tests/test_plate_processor.py::TestPlateDetection::test_process_plate_background_sync_with_valid_image ERROR [ 48%]
+tests/test_plate_processor.py::TestPlateDetection::test_process_plate_with_multiple_vehicles ERROR [ 49%]
+tests/test_plate_processor.py::TestPlateStateManagement::test_vehicle_plate_counts_initialization ERROR [ 50%]
+tests/test_plate_processor.py::TestPlateStateManagement::test_vehicle_plate_counts_accumulation ERROR [ 50%]
+tests/test_plate_processor.py::TestErrorHandling::test_process_plate_with_invalid_image ERROR [ 51%]
+tests/test_plate_processor.py::TestErrorHandling::test_update_vehicle_state_with_invalid_track_id ERROR [ 52%]
+tests/test_plate_processor.py::TestStateIsotation::test_vehicle_states_are_independent ERROR [ 53%]
+tests/test_plate_processor.py::TestNotificationPreparation::test_vehicle_plates_ready_for_notification ERROR [ 54%]
+tests/test_stream_handler.py::TestStreamHandlerInitialization::test_initialization_loads_config FAILED [ 55%]
+tests/test_stream_handler.py::TestStreamHandlerInitialization::test_create_capture_with_string_url ERROR [ 55%]
+tests/test_stream_handler.py::TestStreamHandlerInitialization::test_create_capture_with_integer_source ERROR [ 56%]
+tests/test_stream_handler.py::TestStreamHandlerInitialization::test_create_capture_sets_buffer_size ERROR [ 57%]
+tests/test_stream_handler.py::TestHardwareAcceleration::test_hardware_acceleration_configured ERROR [ 58%]
+tests/test_stream_handler.py::TestOperatingHoursScheduling::test_operating_hours_enabled FAILED [ 59%]
+tests/test_stream_handler.py::TestOperatingHoursScheduling::test_operating_hours_disabled FAILED [ 60%]
+tests/test_stream_handler.py::TestOperatingHoursScheduling::test_is_within_operating_hours_during_hours ERROR [ 61%]
+tests/test_stream_handler.py::TestAutoReconnection::test_reconnect_after_failure ERROR [ 61%]
+tests/test_stream_handler.py::TestAutoReconnection::test_max_retry_attempts ERROR [ 62%]
+tests/test_stream_handler.py::TestProcessVideoStream::test_process_video_stream_with_string_path FAILED [ 63%]
+tests/test_stream_handler.py::TestProcessVideoStream::test_process_video_stream_with_integer_source FAILED [ 64%]
+tests/test_stream_handler.py::TestFrameReading::test_read_frame_success PASSED [ 65%]
+tests/test_stream_handler.py::TestFrameReading::test_read_frame_failure PASSED [ 66%]
+tests/test_stream_handler.py::TestNullWriter::test_null_writer_creation PASSED [ 66%]
+tests/test_stream_handler.py::TestStreamConfiguration::test_rtsp_url_configuration ERROR [ 67%]
+tests/test_stream_handler.py::TestStreamConfiguration::test_buffer_size_configuration ERROR [ 68%]
+tests/test_stream_handler.py::TestStreamConfiguration::test_retry_configuration ERROR [ 69%]
+tests/test_stream_handler.py::TestStreamEdgeCases::test_handle_connection_timeout ERROR [ 70%]
+tests/test_stream_handler.py::TestStreamEdgeCases::test_handle_invalid_rtsp_url ERROR [ 71%]
+tests/test_stream_handler.py::TestStreamEdgeCases::test_handle_network_interruption ERROR [ 72%]
+tests/test_stream_handler.py::TestResourceManagement::test_capture_release PASSED [ 72%]
+tests/test_tracking_utils.py::TestMapDirectionToLabel::test_map_direction_right PASSED [ 73%]
+tests/test_tracking_utils.py::TestMapDirectionToLabel::test_map_direction_left PASSED [ 74%]
+tests/test_tracking_utils.py::TestMapDirectionToLabel::test_map_direction_returns_string PASSED [ 75%]
+tests/test_tracking_utils.py::TestMapDirectionToLabel::test_map_direction_full_circle PASSED [ 76%]
+tests/test_tracking_utils.py::TestCalculateSpeedAndDirection::test_calculate_speed_and_direction_with_valid_inputs PASSED [ 77%]
+tests/test_tracking_utils.py::TestCalculateSpeedAndDirection::test_calculate_speed_and_direction_single_point PASSED [ 77%]
+tests/test_tracking_utils.py::TestCalculateSpeedAndDirection::test_calculate_speed_and_direction_multiple_points PASSED [ 78%]
+tests/test_tracking_utils.py::TestConvertMpsToKmph::test_convert_mps_zero PASSED [ 79%]
+tests/test_tracking_utils.py::TestConvertMpsToKmph::test_convert_mps_positive_value PASSED [ 80%]
+tests/test_tracking_utils.py::TestUpdateTrackingHistory::test_update_tracking_history_adds_entry PASSED [ 81%]
+tests/test_tracking_utils.py::TestUpdateTrackingHistory::test_update_tracking_history_multiple_points PASSED [ 82%]
+tests/test_tracking_utils.py::TestUpdateTrackingHistory::test_update_tracking_history_respects_max_history PASSED [ 83%]
+tests/test_tracking_utils.py::TestUpdateTrackingHistory::test_update_tracking_multiple_vehicles PASSED [ 83%]
+tests/test_vehicle_summary.py::TestLevenshteinDistance::test_levenshtein_identical_strings PASSED [ 84%]
+tests/test_vehicle_summary.py::TestLevenshteinDistance::test_levenshtein_one_substitution PASSED [ 85%]
+tests/test_vehicle_summary.py::TestLevenshteinDistance::test_levenshtein_two_substitutions PASSED [ 86%]
+tests/test_vehicle_summary.py::TestLevenshteinDistance::test_levenshtein_insertion PASSED [ 87%]
+tests/test_vehicle_summary.py::TestLevenshteinDistance::test_levenshtein_deletion PASSED [ 88%]
+tests/test_vehicle_summary.py::TestLevenshteinDistance::test_levenshtein_completely_different PASSED [ 88%]
+tests/test_vehicle_summary.py::TestLevenshteinDistance::test_levenshtein_empty_string PASSED [ 89%]
+tests/test_vehicle_summary.py::TestLevenshteinDistance::test_levenshtein_symmetry PASSED [ 90%]
+tests/test_vehicle_summary.py::TestMergeSimilarPlates::test_merge_similar_plates_identical FAILED [ 91%]
+tests/test_vehicle_summary.py::TestMergeSimilarPlates::test_merge_similar_plates_one_difference FAILED [ 92%]
+tests/test_vehicle_summary.py::TestMergeSimilarPlates::test_merge_similar_plates_different_threshold FAILED [ 93%]
+tests/test_vehicle_summary.py::TestMergeSimilarPlates::test_merge_similar_plates_empty_input FAILED [ 94%]
+tests/test_vehicle_summary.py::TestMergeSimilarPlates::test_merge_similar_plates_single_plate FAILED [ 94%]
+tests/test_vehicle_summary.py::TestMergeSimilarPlates::test_merge_similar_plates_keeps_highest_count FAILED [ 95%]
+tests/test_vehicle_summary.py::TestGenerateDailySummary::test_generate_daily_summary_with_data PASSED [ 96%]
+tests/test_vehicle_summary.py::TestGenerateDailySummary::test_generate_daily_summary_empty_data PASSED [ 97%]
+tests/test_vehicle_summary.py::TestGenerateDailySummary::test_generate_daily_summary_large_dataset PASSED [ 98%]
+tests/test_vehicle_summary.py::TestPlateMergingIntegration::test_merge_and_summarize_workflow FAILED [ 99%]
+tests/test_vehicle_summary.py::TestPlateMergingIntegration::test_threshold_sensitivity FAILED [100%]
+
+=================================== ERRORS ====================================
+_ ERROR at setup of TestProcessFrameStreaming.test_process_frame_streaming_with_valid_input _
+E   AttributeError: <module 'VehicleDetectionTracker.frame_processor' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\frame_processor.py'> does not have the attribute 'YOLO'
+_ ERROR at setup of TestProcessFrameStreaming.test_process_frame_streaming_calls_model_track _
+E   AttributeError: <module 'VehicleDetectionTracker.frame_processor' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\frame_processor.py'> does not have the attribute 'YOLO'
+_ ERROR at setup of TestProcessFrameStreaming.test_process_frame_streaming_handles_no_detections _
+E   AttributeError: <module 'VehicleDetectionTracker.frame_processor' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\frame_processor.py'> does not have the attribute 'YOLO'
+_ ERROR at setup of TestProcessFrameStreaming.test_process_frame_streaming_preserves_frame_shape _
+E   AttributeError: <module 'VehicleDetectionTracker.frame_processor' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\frame_processor.py'> does not have the attribute 'YOLO'
+_ ERROR at setup of TestDirectionCalculation.test_process_frame_calculates_direction _
+E   AttributeError: <module 'VehicleDetectionTracker.frame_processor' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\frame_processor.py'> does not have the attribute 'YOLO'
+_ ERROR at setup of TestCleanupOldVehicleData.test_cleanup_removes_old_vehicles _
+E   AttributeError: <module 'VehicleDetectionTracker.frame_processor' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\frame_processor.py'> does not have the attribute 'YOLO'
+_ ERROR at setup of TestCleanupOldVehicleData.test_cleanup_preserves_recent_vehicles _
+E   AttributeError: <module 'VehicleDetectionTracker.frame_processor' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\frame_processor.py'> does not have the attribute 'YOLO'
+_ ERROR at setup of TestCleanupOldVehicleData.test_cleanup_calls_update_vehicle_state _
+E   AttributeError: <module 'VehicleDetectionTracker.frame_processor' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\frame_processor.py'> does not have the attribute 'YOLO'
+_ ERROR at setup of TestVehicleStateManagement.test_updates_vehicle_timestamp _
+E   AttributeError: <module 'VehicleDetectionTracker.frame_processor' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\frame_processor.py'> does not have the attribute 'YOLO'
+_ ERROR at setup of TestVehicleStateManagement.test_handles_multiple_vehicles _
+E   AttributeError: <module 'VehicleDetectionTracker.frame_processor' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\frame_processor.py'> does not have the attribute 'YOLO'
+_ ERROR at setup of TestFrameProcessorEdgeCases.test_process_frame_with_very_dark_frame _
+E   AttributeError: <module 'VehicleDetectionTracker.frame_processor' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\frame_processor.py'> does not have the attribute 'YOLO'
+_ ERROR at setup of TestFrameProcessorEdgeCases.test_process_frame_with_very_bright_frame _
+E   AttributeError: <module 'VehicleDetectionTracker.frame_processor' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\frame_processor.py'> does not have the attribute 'YOLO'
+_ ERROR at setup of TestFrameProcessorEdgeCases.test_process_frame_with_different_sizes _
+E   AttributeError: <module 'VehicleDetectionTracker.frame_processor' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\frame_processor.py'> does not have the attribute 'YOLO'
+_ ERROR at setup of TestThreadSafeStateMethods.test_update_vehicle_state_sets_plate _
+E   AttributeError: <module 'VehicleDetectionTracker.plate_processor' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\plate_processor.py'> does not have the attribute 'send_telegram_notification'
+_ ERROR at setup of TestThreadSafeStateMethods.test_update_vehicle_state_sets_direction _
+E   AttributeError: <module 'VehicleDetectionTracker.plate_processor' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\plate_processor.py'> does not have the attribute 'send_telegram_notification'
+_ ERROR at setup of TestThreadSafeStateMethods.test_update_vehicle_state_sets_timestamp _
+E   AttributeError: <module 'VehicleDetectionTracker.plate_processor' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\plate_processor.py'> does not have the attribute 'send_telegram_notification'
+_ ERROR at setup of TestThreadSafeStateMethods.test_update_vehicle_state_atomic_update _
+E   AttributeError: <module 'VehicleDetectionTracker.plate_processor' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\plate_processor.py'> does not have the attribute 'send_telegram_notification'
+_ ERROR at setup of TestThreadSafeStateMethods.test_get_vehicle_state_returns_tuple _
+E   AttributeError: <module 'VehicleDetectionTracker.plate_processor' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\plate_processor.py'> does not have the attribute 'send_telegram_notification'
+_ ERROR at setup of TestThreadSafeStateMethods.test_get_vehicle_state_nonexistent_vehicle _
+E   AttributeError: <module 'VehicleDetectionTracker.plate_processor' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\plate_processor.py'> does not have the attribute 'send_telegram_notification'
+_ ERROR at setup of TestThreadSafeStateMethods.test_get_all_vehicle_ids_copy __
+E   AttributeError: <module 'VehicleDetectionTracker.plate_processor' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\plate_processor.py'> does not have the attribute 'send_telegram_notification'
+__ ERROR at setup of TestThreadSafeStateMethods.test_get_vehicle_plates_copy __
+E   AttributeError: <module 'VehicleDetectionTracker.plate_processor' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\plate_processor.py'> does not have the attribute 'send_telegram_notification'
+_ ERROR at setup of TestThreadSafety.test_concurrent_updates_no_race_condition _
+E   AttributeError: <module 'VehicleDetectionTracker.plate_processor' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\plate_processor.py'> does not have the attribute 'send_telegram_notification'
+_ ERROR at setup of TestThreadSafety.test_concurrent_reads_no_race_condition __
+E   AttributeError: <module 'VehicleDetectionTracker.plate_processor' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\plate_processor.py'> does not have the attribute 'send_telegram_notification'
+__ ERROR at setup of TestThreadSafety.test_concurrent_read_write_no_deadlock __
+E   AttributeError: <module 'VehicleDetectionTracker.plate_processor' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\plate_processor.py'> does not have the attribute 'send_telegram_notification'
+_ ERROR at setup of TestPlateDetection.test_process_plate_background_sync_with_valid_image _
+E   AttributeError: <module 'VehicleDetectionTracker.plate_processor' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\plate_processor.py'> does not have the attribute 'send_telegram_notification'
+_ ERROR at setup of TestPlateDetection.test_process_plate_with_multiple_vehicles _
+E   AttributeError: <module 'VehicleDetectionTracker.plate_processor' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\plate_processor.py'> does not have the attribute 'send_telegram_notification'
+_ ERROR at setup of TestPlateStateManagement.test_vehicle_plate_counts_initialization _
+E   AttributeError: <module 'VehicleDetectionTracker.plate_processor' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\plate_processor.py'> does not have the attribute 'send_telegram_notification'
+_ ERROR at setup of TestPlateStateManagement.test_vehicle_plate_counts_accumulation _
+E   AttributeError: <module 'VehicleDetectionTracker.plate_processor' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\plate_processor.py'> does not have the attribute 'send_telegram_notification'
+__ ERROR at setup of TestErrorHandling.test_process_plate_with_invalid_image __
+E   AttributeError: <module 'VehicleDetectionTracker.plate_processor' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\plate_processor.py'> does not have the attribute 'send_telegram_notification'
+_ ERROR at setup of TestErrorHandling.test_update_vehicle_state_with_invalid_track_id _
+E   AttributeError: <module 'VehicleDetectionTracker.plate_processor' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\plate_processor.py'> does not have the attribute 'send_telegram_notification'
+__ ERROR at setup of TestStateIsotation.test_vehicle_states_are_independent ___
+E   AttributeError: <module 'VehicleDetectionTracker.plate_processor' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\plate_processor.py'> does not have the attribute 'send_telegram_notification'
+_ ERROR at setup of TestNotificationPreparation.test_vehicle_plates_ready_for_notification _
+E   AttributeError: <module 'VehicleDetectionTracker.plate_processor' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\plate_processor.py'> does not have the attribute 'send_telegram_notification'
+_ ERROR at setup of TestStreamHandlerInitialization.test_create_capture_with_string_url _
+E   AttributeError: <module 'VehicleDetectionTracker.stream_handler' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\stream_handler.py'> does not have the attribute 'load_config'
+_ ERROR at setup of TestStreamHandlerInitialization.test_create_capture_with_integer_source _
+E   AttributeError: <module 'VehicleDetectionTracker.stream_handler' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\stream_handler.py'> does not have the attribute 'load_config'
+_ ERROR at setup of TestStreamHandlerInitialization.test_create_capture_sets_buffer_size _
+E   AttributeError: <module 'VehicleDetectionTracker.stream_handler' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\stream_handler.py'> does not have the attribute 'load_config'
+_ ERROR at setup of TestHardwareAcceleration.test_hardware_acceleration_configured _
+E   AttributeError: <module 'VehicleDetectionTracker.stream_handler' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\stream_handler.py'> does not have the attribute 'load_config'
+_ ERROR at setup of TestOperatingHoursScheduling.test_is_within_operating_hours_during_hours _
+E   AttributeError: <module 'VehicleDetectionTracker.stream_handler' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\stream_handler.py'> does not have the attribute 'load_config'
+_____ ERROR at setup of TestAutoReconnection.test_reconnect_after_failure _____
+E   AttributeError: <module 'VehicleDetectionTracker.stream_handler' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\stream_handler.py'> does not have the attribute 'load_config'
+_______ ERROR at setup of TestAutoReconnection.test_max_retry_attempts ________
+E   AttributeError: <module 'VehicleDetectionTracker.stream_handler' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\stream_handler.py'> does not have the attribute 'load_config'
+____ ERROR at setup of TestStreamConfiguration.test_rtsp_url_configuration ____
+E   AttributeError: <module 'VehicleDetectionTracker.stream_handler' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\stream_handler.py'> does not have the attribute 'load_config'
+__ ERROR at setup of TestStreamConfiguration.test_buffer_size_configuration ___
+E   AttributeError: <module 'VehicleDetectionTracker.stream_handler' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\stream_handler.py'> does not have the attribute 'load_config'
+_____ ERROR at setup of TestStreamConfiguration.test_retry_configuration ______
+E   AttributeError: <module 'VehicleDetectionTracker.stream_handler' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\stream_handler.py'> does not have the attribute 'load_config'
+____ ERROR at setup of TestStreamEdgeCases.test_handle_connection_timeout _____
+E   AttributeError: <module 'VehicleDetectionTracker.stream_handler' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\stream_handler.py'> does not have the attribute 'load_config'
+_____ ERROR at setup of TestStreamEdgeCases.test_handle_invalid_rtsp_url ______
+E   AttributeError: <module 'VehicleDetectionTracker.stream_handler' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\stream_handler.py'> does not have the attribute 'load_config'
+___ ERROR at setup of TestStreamEdgeCases.test_handle_network_interruption ____
+E   AttributeError: <module 'VehicleDetectionTracker.stream_handler' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\stream_handler.py'> does not have the attribute 'load_config'
+================================== FAILURES ===================================
+E   assert 0 > 0
+D:\TrucNV\vehicle_detection_tracker\tests\test_device_utils.py:25: assert 0 > 0
+E   AssertionError: Torch not compiled with CUDA enabled
+C:\Users\ADMIN\AppData\Roaming\Python\Python313\site-packages\torch\cuda\__init__.py:403: AssertionError: Torch not compiled with CUDA enabled
+E   AttributeError: <module 'VehicleDetectionTracker.device_utils' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\device_utils.py'> does not have the attribute 'log'
+C:\ProgramData\miniconda3\Lib\unittest\mock.py:1467: AttributeError: <module 'VehicleDetectionTracker.device_utils' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\device_utils.py'> does not have the attribute 'log'
+E   AttributeError: <module 'VehicleDetectionTracker.device_utils' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\device_utils.py'> does not have the attribute 'log'
+C:\ProgramData\miniconda3\Lib\unittest\mock.py:1467: AttributeError: <module 'VehicleDetectionTracker.device_utils' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\device_utils.py'> does not have the attribute 'log'
+E   AttributeError: <module 'VehicleDetectionTracker.device_utils' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\device_utils.py'> does not have the attribute 'log'
+C:\ProgramData\miniconda3\Lib\unittest\mock.py:1467: AttributeError: <module 'VehicleDetectionTracker.device_utils' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\device_utils.py'> does not have the attribute 'log'
+E   AttributeError: <module 'VehicleDetectionTracker.frame_processor' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\frame_processor.py'> does not have the attribute 'YOLO'
+C:\ProgramData\miniconda3\Lib\unittest\mock.py:1467: AttributeError: <module 'VehicleDetectionTracker.frame_processor' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\frame_processor.py'> does not have the attribute 'YOLO'
+E   AttributeError: <module 'VehicleDetectionTracker.frame_processor' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\frame_processor.py'> does not have the attribute 'YOLO'
+C:\ProgramData\miniconda3\Lib\unittest\mock.py:1467: AttributeError: <module 'VehicleDetectionTracker.frame_processor' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\frame_processor.py'> does not have the attribute 'YOLO'
+E   AssertionError: assert False
+     +  where False = exists()
+     +    where exists = WindowsPath('C:/Users/ADMIN/AppData/Local/Temp/pytest-of-ADMIN/pytest-0/test_write_to_log_file_success0/test.log').exists
+D:\TrucNV\vehicle_detection_tracker\tests\test_logging_utils.py:47: AssertionError: assert False
+E   AttributeError: <module 'VehicleDetectionTracker.plate_processor' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\plate_processor.py'> does not have the attribute 'PaddleOCR'
+C:\ProgramData\miniconda3\Lib\unittest\mock.py:1467: AttributeError: <module 'VehicleDetectionTracker.plate_processor' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\plate_processor.py'> does not have the attribute 'PaddleOCR'
+E   AttributeError: <module 'VehicleDetectionTracker.plate_processor' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\plate_processor.py'> does not have the attribute 'PaddleOCR'
+C:\ProgramData\miniconda3\Lib\unittest\mock.py:1467: AttributeError: <module 'VehicleDetectionTracker.plate_processor' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\plate_processor.py'> does not have the attribute 'PaddleOCR'
+E   AttributeError: <module 'VehicleDetectionTracker.stream_handler' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\stream_handler.py'> does not have the attribute 'load_config'
+C:\ProgramData\miniconda3\Lib\unittest\mock.py:1467: AttributeError: <module 'VehicleDetectionTracker.stream_handler' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\stream_handler.py'> does not have the attribute 'load_config'
+E   AttributeError: <module 'VehicleDetectionTracker.stream_handler' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\stream_handler.py'> does not have the attribute 'load_config'
+C:\ProgramData\miniconda3\Lib\unittest\mock.py:1467: AttributeError: <module 'VehicleDetectionTracker.stream_handler' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\stream_handler.py'> does not have the attribute 'load_config'
+E   AttributeError: <module 'VehicleDetectionTracker.stream_handler' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\stream_handler.py'> does not have the attribute 'load_config'
+C:\ProgramData\miniconda3\Lib\unittest\mock.py:1467: AttributeError: <module 'VehicleDetectionTracker.stream_handler' from 'D:\\TrucNV\\vehicle_detection_tracker\\VehicleDetectionTracker\\stream_handler.py'> does not have the attribute 'load_config'
+E   AssertionError: assert False
+     +  where False = <MagicMock name='VideoCapture' id='2384685754960'>.called
+D:\TrucNV\vehicle_detection_tracker\tests\test_stream_handler.py:196: AssertionError: assert False
+E   AssertionError: assert False
+     +  where False = <MagicMock name='VideoCapture' id='2384686395280'>.called
+D:\TrucNV\vehicle_detection_tracker\tests\test_stream_handler.py:211: AssertionError: assert False
+E   TypeError: merge_similar_plates() got an unexpected keyword argument 'threshold'
+D:\TrucNV\vehicle_detection_tracker\tests\test_vehicle_summary.py:97: TypeError: merge_similar_plates() got an unexpected keyword argument 'threshold'
+E   TypeError: merge_similar_plates() got an unexpected keyword argument 'threshold'
+D:\TrucNV\vehicle_detection_tracker\tests\test_vehicle_summary.py:105: TypeError: merge_similar_plates() got an unexpected keyword argument 'threshold'
+E   TypeError: merge_similar_plates() got an unexpected keyword argument 'threshold'
+D:\TrucNV\vehicle_detection_tracker\tests\test_vehicle_summary.py:115: TypeError: merge_similar_plates() got an unexpected keyword argument 'threshold'
+E   TypeError: merge_similar_plates() got an unexpected keyword argument 'threshold'
+D:\TrucNV\vehicle_detection_tracker\tests\test_vehicle_summary.py:125: TypeError: merge_similar_plates() got an unexpected keyword argument 'threshold'
+E   TypeError: merge_similar_plates() got an unexpected keyword argument 'threshold'
+D:\TrucNV\vehicle_detection_tracker\tests\test_vehicle_summary.py:133: TypeError: merge_similar_plates() got an unexpected keyword argument 'threshold'
+E   TypeError: merge_similar_plates() got an unexpected keyword argument 'threshold'
+D:\TrucNV\vehicle_detection_tracker\tests\test_vehicle_summary.py:141: TypeError: merge_similar_plates() got an unexpected keyword argument 'threshold'
+E   TypeError: merge_similar_plates() got an unexpected keyword argument 'threshold'
+D:\TrucNV\vehicle_detection_tracker\tests\test_vehicle_summary.py:201: TypeError: merge_similar_plates() got an unexpected keyword argument 'threshold'
+E   TypeError: merge_similar_plates() got an unexpected keyword argument 'threshold'
+D:\TrucNV\vehicle_detection_tracker\tests\test_vehicle_summary.py:216: TypeError: merge_similar_plates() got an unexpected keyword argument 'threshold'
+=========================== short test summary info ===========================
+FAILED tests/test_device_utils.py::TestCheckCudaAvailable::test_check_cuda_available_when_cuda_present
+FAILED tests/test_device_utils.py::TestCheckCudaAvailable::test_check_cuda_returns_tuple
+FAILED tests/test_device_utils.py::TestGetDevice::test_get_device_with_gpu - ...
+FAILED tests/test_device_utils.py::TestGetDevice::test_get_device_without_gpu
+FAILED tests/test_device_utils.py::TestGetPreferredDevice::test_device_preference_order
+FAILED tests/test_frame_processor.py::TestFrameProcessorInitialization::test_initialization_with_valid_model
+FAILED tests/test_frame_processor.py::TestFrameProcessorInitialization::test_initialization_with_confidence
+FAILED tests/test_logging_utils.py::TestWriteToLogFile::test_write_to_log_file_success
+FAILED tests/test_plate_processor.py::TestPlateProcessorInitialization::test_initialization_creates_state_lock
+FAILED tests/test_plate_processor.py::TestPlateProcessorInitialization::test_initialization_creates_state_dicts
+FAILED tests/test_stream_handler.py::TestStreamHandlerInitialization::test_initialization_loads_config
+FAILED tests/test_stream_handler.py::TestOperatingHoursScheduling::test_operating_hours_enabled
+FAILED tests/test_stream_handler.py::TestOperatingHoursScheduling::test_operating_hours_disabled
+FAILED tests/test_stream_handler.py::TestProcessVideoStream::test_process_video_stream_with_string_path
+FAILED tests/test_stream_handler.py::TestProcessVideoStream::test_process_video_stream_with_integer_source
+FAILED tests/test_vehicle_summary.py::TestMergeSimilarPlates::test_merge_similar_plates_identical
+FAILED tests/test_vehicle_summary.py::TestMergeSimilarPlates::test_merge_similar_plates_one_difference
+FAILED tests/test_vehicle_summary.py::TestMergeSimilarPlates::test_merge_similar_plates_different_threshold
+FAILED tests/test_vehicle_summary.py::TestMergeSimilarPlates::test_merge_similar_plates_empty_input
+FAILED tests/test_vehicle_summary.py::TestMergeSimilarPlates::test_merge_similar_plates_single_plate
+FAILED tests/test_vehicle_summary.py::TestMergeSimilarPlates::test_merge_similar_plates_keeps_highest_count
+FAILED tests/test_vehicle_summary.py::TestPlateMergingIntegration::test_merge_and_summarize_workflow
+FAILED tests/test_vehicle_summary.py::TestPlateMergingIntegration::test_threshold_sensitivity
+ERROR tests/test_frame_processor.py::TestProcessFrameStreaming::test_process_frame_streaming_with_valid_input
+ERROR tests/test_frame_processor.py::TestProcessFrameStreaming::test_process_frame_streaming_calls_model_track
+ERROR tests/test_frame_processor.py::TestProcessFrameStreaming::test_process_frame_streaming_handles_no_detections
+ERROR tests/test_frame_processor.py::TestProcessFrameStreaming::test_process_frame_streaming_preserves_frame_shape
+ERROR tests/test_frame_processor.py::TestDirectionCalculation::test_process_frame_calculates_direction
+ERROR tests/test_frame_processor.py::TestCleanupOldVehicleData::test_cleanup_removes_old_vehicles
+ERROR tests/test_frame_processor.py::TestCleanupOldVehicleData::test_cleanup_preserves_recent_vehicles
+ERROR tests/test_frame_processor.py::TestCleanupOldVehicleData::test_cleanup_calls_update_vehicle_state
+ERROR tests/test_frame_processor.py::TestVehicleStateManagement::test_updates_vehicle_timestamp
+ERROR tests/test_frame_processor.py::TestVehicleStateManagement::test_handles_multiple_vehicles
+ERROR tests/test_frame_processor.py::TestFrameProcessorEdgeCases::test_process_frame_with_very_dark_frame
+ERROR tests/test_frame_processor.py::TestFrameProcessorEdgeCases::test_process_frame_with_very_bright_frame
+ERROR tests/test_frame_processor.py::TestFrameProcessorEdgeCases::test_process_frame_with_different_sizes
+ERROR tests/test_plate_processor.py::TestThreadSafeStateMethods::test_update_vehicle_state_sets_plate
+ERROR tests/test_plate_processor.py::TestThreadSafeStateMethods::test_update_vehicle_state_sets_direction
+ERROR tests/test_plate_processor.py::TestThreadSafeStateMethods::test_update_vehicle_state_sets_timestamp
+ERROR tests/test_plate_processor.py::TestThreadSafeStateMethods::test_update_vehicle_state_atomic_update
+ERROR tests/test_plate_processor.py::TestThreadSafeStateMethods::test_get_vehicle_state_returns_tuple
+ERROR tests/test_plate_processor.py::TestThreadSafeStateMethods::test_get_vehicle_state_nonexistent_vehicle
+ERROR tests/test_plate_processor.py::TestThreadSafeStateMethods::test_get_all_vehicle_ids_copy
+ERROR tests/test_plate_processor.py::TestThreadSafeStateMethods::test_get_vehicle_plates_copy
+ERROR tests/test_plate_processor.py::TestThreadSafety::test_concurrent_updates_no_race_condition
+ERROR tests/test_plate_processor.py::TestThreadSafety::test_concurrent_reads_no_race_condition
+ERROR tests/test_plate_processor.py::TestThreadSafety::test_concurrent_read_write_no_deadlock
+ERROR tests/test_plate_processor.py::TestPlateDetection::test_process_plate_background_sync_with_valid_image
+ERROR tests/test_plate_processor.py::TestPlateDetection::test_process_plate_with_multiple_vehicles
+ERROR tests/test_plate_processor.py::TestPlateStateManagement::test_vehicle_plate_counts_initialization
+ERROR tests/test_plate_processor.py::TestPlateStateManagement::test_vehicle_plate_counts_accumulation
+ERROR tests/test_plate_processor.py::TestErrorHandling::test_process_plate_with_invalid_image
+ERROR tests/test_plate_processor.py::TestErrorHandling::test_update_vehicle_state_with_invalid_track_id
+ERROR tests/test_plate_processor.py::TestStateIsotation::test_vehicle_states_are_independent
+ERROR tests/test_plate_processor.py::TestNotificationPreparation::test_vehicle_plates_ready_for_notification
+ERROR tests/test_stream_handler.py::TestStreamHandlerInitialization::test_create_capture_with_string_url
+ERROR tests/test_stream_handler.py::TestStreamHandlerInitialization::test_create_capture_with_integer_source
+ERROR tests/test_stream_handler.py::TestStreamHandlerInitialization::test_create_capture_sets_buffer_size
+ERROR tests/test_stream_handler.py::TestHardwareAcceleration::test_hardware_acceleration_configured
+ERROR tests/test_stream_handler.py::TestOperatingHoursScheduling::test_is_within_operating_hours_during_hours
+ERROR tests/test_stream_handler.py::TestAutoReconnection::test_reconnect_after_failure
+ERROR tests/test_stream_handler.py::TestAutoReconnection::test_max_retry_attempts
+ERROR tests/test_stream_handler.py::TestStreamConfiguration::test_rtsp_url_configuration
+ERROR tests/test_stream_handler.py::TestStreamConfiguration::test_buffer_size_configuration
+ERROR tests/test_stream_handler.py::TestStreamConfiguration::test_retry_configuration
+ERROR tests/test_stream_handler.py::TestStreamEdgeCases::test_handle_connection_timeout
+ERROR tests/test_stream_handler.py::TestStreamEdgeCases::test_handle_invalid_rtsp_url
+ERROR tests/test_stream_handler.py::TestStreamEdgeCases::test_handle_network_interruption
+================== 23 failed, 50 passed, 45 errors in 3.16s ===================
