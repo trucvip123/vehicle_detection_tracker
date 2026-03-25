@@ -12,6 +12,9 @@ from VehicleDetectionTracker.plate_utils import (
     detect_license_plate_sync,
     submit_plate_detection_async,
     initialize_inference_queue,
+    batch_detect_license_plates,
+    initialize_batch_accumulator,
+    get_batch_accumulator,
 )
 from VehicleDetectionTracker.utils.send_bot import send_notify_to_telegram
 from VehicleDetectionTracker.logging_utils import log_plate
@@ -56,6 +59,10 @@ class PlateProcessor:
         self.executor = executor
         self.log = log_func
         self.metrics = get_metrics_collector()  # Get metrics collector instance
+        
+        # Load detection config for batch processing
+        from VehicleDetectionTracker.config_loader import get_plate_detection_config
+        self.detection_config = get_plate_detection_config()
 
         # Track detected plates per vehicle
         self.vehicle_plates = {}  # {track_id: plate_text}
@@ -95,6 +102,30 @@ class PlateProcessor:
         initialize_inference_queue(num_workers=5)
         self.log("[PLATE_PROCESSOR] ✓ Initialized inference queue with 2 worker threads")
 
+        # Initialize batch accumulator for async batch OCR (Approach 2)
+        from VehicleDetectionTracker.config_loader import get_batch_inference_config
+        batch_config = get_batch_inference_config()
+        self.batch_enabled = batch_config.get("enabled", False)
+        self.batch_accumulator = None
+        if self.batch_enabled:
+            self.batch_accumulator = initialize_batch_accumulator(
+                batch_size=batch_config.get("batch_size", 8),
+                time_threshold_ms=batch_config.get("time_threshold_ms", 500)
+            )
+            self.log(f"[PLATE_PROCESSOR] ✓ Initialized batch accumulator (batch_size={batch_config.get('batch_size')}, "
+                    f"time_threshold={batch_config.get('time_threshold_ms')}ms)")
+            
+            # Start batch processor thread
+            self.batch_processor_thread = threading.Thread(
+                target=self._batch_processor_loop,
+                daemon=True,
+                name="BatchProcessor"
+            )
+            self.batch_processor_thread.start()
+            self.batch_processor_running = True
+        else:
+            self.log("[PLATE_PROCESSOR] Batch accumulator disabled (using traditional per-vehicle processing)")
+        
         # Load persisted state if it exists
         self._load_state()
 
@@ -728,6 +759,254 @@ class PlateProcessor:
             
             # Add callback to be called when task completes
             future.add_done_callback(lambda f: self._on_plate_task_complete(track_id, vehicle_dir))
+
+    def submit_plate_processing_batch(self, frame_vehicles: Dict[int, dict]) -> None:
+        """
+        Submit batch of vehicle detections to accumulator for batch OCR processing (Approach 2).
+        
+        This method:
+        1. Adds each vehicle detection to the batch accumulator
+        2. Triggers batch processing when size or time threshold is reached
+        3. Manages the batch processor thread
+        
+        Args:
+            frame_vehicles: Dict of {track_id: {frame, direction, timestamp, timestamp_str, vehicle_dir}}
+        """
+        if not self.batch_enabled or not self.batch_accumulator:
+            # Fall back to per-vehicle processing
+            self.log(f"[BATCH_SUBMIT] Batch accumulator disabled, falling back to per-vehicle processing...")
+            for track_id, vehicle_data in frame_vehicles.items():
+                self.submit_plate_processing(
+                    track_id,
+                    vehicle_data['frame'],
+                    vehicle_data['direction'],
+                    vehicle_data['timestamp'],
+                    vehicle_data['timestamp_str'],
+                    vehicle_data['vehicle_dir']
+                )
+            return
+        
+        batch_size_before = len(frame_vehicles)
+        self.log(f"[BATCH_SUBMIT] Adding {batch_size_before} vehicles to batch accumulator...")
+        
+        try:
+            # Check if already notified before submitting to avoid unnecessary processing
+            global _vehicle_telegram_sent_with_plate, _vehicle_telegram_sent_lock
+            
+            vehicles_to_add = {}
+            with _vehicle_telegram_sent_lock:
+                for track_id, vehicle_data in frame_vehicles.items():
+                    if track_id not in _vehicle_telegram_sent_with_plate:
+                        vehicles_to_add[track_id] = vehicle_data
+            
+            if not vehicles_to_add:
+                self.log(f"[BATCH_SUBMIT] All vehicles already notified, skipping batch submission")
+                return
+            
+            # Add each vehicle to the accumulator
+            batch_triggered = False
+            for track_id, vehicle_data in vehicles_to_add.items():
+                triggered = self.batch_accumulator.add_detection(
+                    track_id,
+                    vehicle_data['frame'],
+                    vehicle_data['timestamp_str'],
+                    vehicle_data['vehicle_dir'],
+                    vehicle_data['direction'],
+                    vehicle_data['timestamp']
+                )
+                if triggered:
+                    batch_triggered = True
+            
+            # Update pending task count for tracking
+            with self._task_count_lock:
+                for track_id in vehicles_to_add.keys():
+                    if track_id not in self.vehicle_pending_task_count:
+                        self.vehicle_pending_task_count[track_id] = 0
+                    self.vehicle_pending_task_count[track_id] += 1
+            
+            if batch_triggered:
+                self.log(f"[BATCH_SUBMIT] ✓ Batch trigger reached, processing will be initiated by batch processor thread")
+            else:
+                self.log(f"[BATCH_SUBMIT] Batch accumulating ({len(vehicles_to_add)} vehicles added)")
+        
+        except Exception as e:
+            self.log(f"[BATCH_SUBMIT] ❌ Error adding to batch accumulator: {e}")
+            import traceback
+            self.log(traceback.format_exc())
+
+    def _batch_processor_loop(self) -> None:
+        """
+        Main loop for batch processor thread.
+        Continuously monitors batch accumulator and processes batches.
+        """
+        self.log(f"[BATCH_PROCESSOR] Thread started, monitoring batch accumulator...")
+        
+        while self.batch_processor_running:
+            try:
+                batch_stats = self.batch_accumulator.get_batch_stats()
+                pending = batch_stats['pending_items']
+                elapsed_ms = batch_stats['elapsed_ms']
+                
+                # Check if batch is ready or time threshold exceeded
+                has_items = pending > 0
+                time_expired = elapsed_ms > self.batch_accumulator.max_batch_wait_ms
+                size_threshold = pending >= self.batch_accumulator.batch_size
+                
+                if size_threshold:
+                    self.log(f"[BATCH_PROCESSOR] Size threshold reached ({pending}/{self.batch_accumulator.batch_size})")
+                    batch = self.batch_accumulator.flush()
+                    if batch:
+                        self._process_batch(batch)
+                
+                elif time_expired and has_items:
+                    self.log(f"[BATCH_PROCESSOR] Time threshold exceeded ({elapsed_ms:.0f}ms/{self.batch_accumulator.max_batch_wait_ms}ms)")
+                    batch = self.batch_accumulator.flush()
+                    if batch:
+                        self._process_batch(batch)
+                
+                else:
+                    # Sleep briefly before checking again
+                    threading.Event().wait(0.1)
+            
+            except Exception as e:
+                self.log(f"[BATCH_PROCESSOR] ❌ Error in batch processor loop: {e}")
+                import traceback
+                self.log(traceback.format_exc())
+                threading.Event().wait(0.5)  # Back off on error
+    
+    def _process_batch(self, frame_vehicles: dict) -> None:
+        """
+        Process a batch of vehicle detections.
+        
+        Args:
+            frame_vehicles: Dict of {track_id: vehicle_data}
+        """
+        if not frame_vehicles:
+            return
+        
+        self.log(f"[BATCH_PROCESS] Processing batch of {len(frame_vehicles)} vehicles...")
+        
+        # Submit batch to executor for processing
+        future = self.executor.submit(
+            self._execute_batch_ocr,
+            frame_vehicles
+        )
+        
+        # Add callback for when batch completes
+        future.add_done_callback(lambda f: self._on_batch_complete(frame_vehicles.keys()))
+    
+    def _execute_batch_ocr(self, frame_vehicles: dict) -> dict:
+        """
+        Execute batch OCR processing (run in executor thread).
+        
+        Args:
+            frame_vehicles: Dict of {track_id: vehicle_data}
+        
+        Returns:
+            Dict of {track_id: result}
+        """
+        vehicle_frames_dict = {
+            tid: v['frame'] for tid, v in frame_vehicles.items()
+        }
+        
+        try:
+            # Run batch detection and OCR
+            batch_results = batch_detect_license_plates(
+                self.plate_model,
+                vehicle_frames_dict,
+                self.ocr_reader,
+                self._model_lock,
+                self.detection_config if hasattr(self, 'detection_config') else {}
+            )
+            
+            # Update vehicle states with results
+            for track_id, result in batch_results.items():
+                try:
+                    self._handle_batch_plate_result(
+                        track_id,
+                        result,
+                        frame_vehicles[track_id]['direction'],
+                        frame_vehicles[track_id]['timestamp'],
+                        frame_vehicles[track_id]['vehicle_dir']
+                    )
+                except Exception as handle_err:
+                    self.log(f"[BATCH_PROCESS] ❌ Error handling result for track_id={track_id}: {handle_err}")
+            
+            self.log(f"[BATCH_PROCESS] ✓ Batch OCR complete for {len(batch_results)} vehicles")
+            return batch_results
+        
+        except Exception as e:
+            self.log(f"[BATCH_PROCESS] ❌ Error in batch OCR execution: {e}")
+            import traceback
+            self.log(traceback.format_exc())
+            return {}
+    
+    def _handle_batch_plate_result(self, track_id: int, result: dict, direction: str, 
+                                   timestamp: datetime, vehicle_dir: str) -> None:
+        """
+        Handle a single plate detection result from batch processing.
+        
+        Args:
+            track_id: Vehicle track ID
+            result: Detection result dict {text, count, confidence}
+            direction: Direction label
+            timestamp: Frame timestamp
+            vehicle_dir: Vehicle directory
+        """
+        try:
+            plate_text = result.get('text')
+            num_detections = result.get('count', 0)
+            confidence = result.get('confidence', 0)
+            
+            self.log(f"[BATCH_RESULT] vehicle_id={track_id} Result: text='{plate_text}', count={num_detections}, conf={confidence:.3f}")
+            
+            # Update vehicle state
+            if plate_text and plate_text != "unknown" and plate_text is not None:
+                self.log(f"[BATCH_RESULT] vehicle_id={track_id} ✓ Setting primary plate: '{plate_text}'")
+                self.update_vehicle_state(track_id, plate_text=plate_text, direction=direction, timestamp=timestamp)
+            elif num_detections > 0:
+                # OCR failed but we detected plates - use placeholder
+                placeholder_text = f"DETECTED_{num_detections}x"
+                self.log(f"[BATCH_RESULT] vehicle_id={track_id} ⚠ OCR failed, using placeholder: '{placeholder_text}'")
+                self.update_vehicle_state(track_id, plate_text=placeholder_text, direction=direction, timestamp=timestamp)
+        
+        except Exception as e:
+            self.log(f"[BATCH_RESULT] ❌ Error handling batch result for track_id={track_id}: {e}")
+    
+    def _on_batch_complete(self, track_ids) -> None:
+        """
+        Callback when batch processing completes.
+        Decrements task counts and sends notifications if ready.
+        
+        Args:
+            track_ids: Iterable of track IDs that were in the batch
+        """
+        try:
+            with self._task_count_lock:
+                for track_id in track_ids:
+                    if track_id in self.vehicle_pending_task_count:
+                        self.vehicle_pending_task_count[track_id] -= 1
+                        remaining = self.vehicle_pending_task_count[track_id]
+                        
+                        if remaining == 0:
+                            # All tasks complete, send notification
+                            self.log(f"[BATCH_COMPLETE] vehicle_id={track_id} All batch tasks complete, sending notification...")
+                            vehicle_dir = f"screenshots/{track_id}"
+                            
+                            # Send notification OUTSIDE the lock
+                            try:
+                                result = self.send_final_vehicle_notification(track_id, vehicle_dir=vehicle_dir)
+                                if result:
+                                    self.log(f"[BATCH_COMPLETE] vehicle_id={track_id} ✓ Notification sent")
+                                else:
+                                    self.log(f"[BATCH_COMPLETE] vehicle_id={track_id} ⚠ Notification failed")
+                            except Exception as notify_err:
+                                self.log(f"[BATCH_COMPLETE] vehicle_id={track_id} ❌ Notification error: {notify_err}")
+        
+        except Exception as e:
+            self.log(f"[BATCH_COMPLETE] ❌ Error in batch complete callback: {e}")
+            import traceback
+            self.log(traceback.format_exc())
 
     def _on_plate_task_complete(self, track_id: int, vehicle_dir: str) -> None:
         """

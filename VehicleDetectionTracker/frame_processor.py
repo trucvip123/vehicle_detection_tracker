@@ -162,6 +162,9 @@ class FrameProcessor:
             # Add date-based subfolder under screenshots
             date_str = datetime.now().strftime("%Y%m%d")
             time_str = datetime.now().strftime("%H%M")
+            
+            # Collect vehicles for batch processing
+            frame_vehicles_batch = {}
 
             for box, track_id, class_id in zip(boxes, track_ids, class_id_list):
                 class_name = coco_class_map.get(class_id, str(class_id))
@@ -272,20 +275,25 @@ class FrameProcessor:
                     )
                     continue
 
-                # Process plate in background
+                # Add to batch for submission
                 if vehicle_frame.size > 0:
-                    timestamp_str = frame_timestamp.strftime("%Y%m%d_%H%M%S_%f")[:-3]
+                    frame_vehicles_batch[track_id] = {
+                        'frame': vehicle_frame.copy(),
+                        'direction': direction_label,
+                        'timestamp': frame_timestamp,
+                        'timestamp_str': timestamp_str,
+                        'vehicle_dir': vehicle_dir
+                    }
                     self.log(
-                        f"[FRAME] Submitting plate processing for vehicle_id={track_id}"
+                        f"[FRAME] Added vehicle_id={track_id} to batch for processing"
                     )
-                    plate_processor.submit_plate_processing(
-                        track_id,
-                        vehicle_frame.copy(),
-                        direction_label,
-                        frame_timestamp,
-                        timestamp_str,
-                        vehicle_dir=vehicle_dir,
-                    )
+            
+            # Submit entire batch for processing
+            if frame_vehicles_batch:
+                self.log(
+                    f"[FRAME] Submitting batch processing for {len(frame_vehicles_batch)} vehicles"
+                )
+                plate_processor.submit_plate_processing_batch(frame_vehicles_batch)
 
         # Periodically clean up old vehicle data from memory
         self._cleanup_old_vehicle_data(frame_timestamp, plate_processor)

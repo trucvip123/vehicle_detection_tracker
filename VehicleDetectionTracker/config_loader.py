@@ -78,6 +78,10 @@ class ConfigLoader:
         """Lấy config cho OCR"""
         return self._config.get("ocr", {})
 
+    def get_batch_inference_config(self) -> Dict:
+        """Lấy config cho batch inference"""
+        return self._config.get("batch_inference", {})
+
     def get_rtsp_config(self) -> Dict:
         """Lấy config cho RTSP"""
         return self._config.get("rtsp", {})
@@ -137,6 +141,11 @@ def get_plate_detection_config() -> Dict:
 def get_ocr_config() -> Dict:
     """Lấy OCR config"""
     return get_config().get_ocr_config()
+
+
+def get_batch_inference_config() -> Dict:
+    """Lấy batch inference config"""
+    return get_config().get_batch_inference_config()
 
 
 def get_rtsp_config() -> Dict:

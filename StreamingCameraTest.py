@@ -49,7 +49,7 @@ def main():
     RTSP_SOURCE = "rtsp://admin:MOVYKV@aicamera.serveminecraft.net:554/Streaming/Channels/101"
     VIDEO_SOURCE = r"video\n.mp4"
 
-    tracker.process_video_streaming(VIDEO_SOURCE)
+    tracker.process_video_streaming(RTSP_SOURCE)
     
     # **CRITICAL:** Wait for all pending tasks and send notifications before exit
     print("\n" + "="*80)

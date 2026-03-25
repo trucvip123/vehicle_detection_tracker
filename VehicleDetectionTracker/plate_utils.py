@@ -166,6 +166,183 @@ def get_inference_queue():
     return _inference_queue
 
 
+# ============================================================================
+# Batch Accumulator System for Async Batch Processing
+# ============================================================================
+
+class BatchAccumulator:
+    """
+    Accumulates plate detection requests from multiple frames and processes them in batches.
+    Provides both size-triggered and time-triggered batch processing for optimal throughput.
+    """
+    
+    def __init__(self, 
+                 batch_size=8,
+                 time_threshold_ms=500,
+                 max_batch_wait_ms=2000,
+                 log_func=None):
+        """Initialize batch accumulator.
+        
+        Args:
+            batch_size (int): Target batch size for triggering OCR (default: 8)
+            time_threshold_ms (int): Max time to wait before processing partial batch (ms)
+            max_batch_wait_ms (int): Absolute max wait time before forced flush (ms)
+            log_func: Logging function (uses _log if None)
+        """
+        self.batch_size = batch_size
+        self.time_threshold_ms = time_threshold_ms
+        self.max_batch_wait_ms = max_batch_wait_ms
+        self.log_func = log_func or _log
+        
+        # Batch storage: {accumulator_id: {track_id: plate_data}}
+        self.pending_batch = {}  # Current batch being accumulated
+        self.batch_lock = threading.Lock()
+        self.batch_event = threading.Event()  # Signaled when batch ready
+        
+        # Timing
+        self.batch_start_time = None
+        self.last_flush_time = datetime.now()
+        
+        # Processing state
+        self.is_processing = False
+        self.total_processed = 0
+        self.total_batches = 0
+        
+        self.log_func(f"[BATCH_ACCUM] Initialized: batch_size={batch_size}, "
+                     f"time_threshold={time_threshold_ms}ms, max_wait={max_batch_wait_ms}ms")
+    
+    def add_detection(self, track_id: int, vehicle_frame: np.ndarray, 
+                     timestamp_str: str, vehicle_dir: str, 
+                     direction: str, timestamp) -> bool:
+        """Add a detected vehicle to the batch accumulator.
+        
+        Args:
+            track_id: Vehicle tracking ID
+            vehicle_frame: Extracted vehicle frame
+            timestamp_str: Timestamp string for logging
+            vehicle_dir: Output directory for screenshots
+            direction: Direction label
+            timestamp: Frame timestamp
+            
+        Returns:
+            bool: True if batch was triggered, False otherwise
+        """
+        with self.batch_lock:
+            # Initialize batch start time on first item
+            if not self.pending_batch and self.batch_start_time is None:
+                self.batch_start_time = datetime.now()
+            
+            # Add to batch
+            self.pending_batch[track_id] = {
+                'frame': vehicle_frame.copy(),
+                'timestamp_str': timestamp_str,
+                'vehicle_dir': vehicle_dir,
+                'direction': direction,
+                'timestamp': timestamp
+            }
+            
+            batch_size_now = len(self.pending_batch)
+            elapsed_ms = (datetime.now() - self.batch_start_time).total_seconds() * 1000
+            
+            self.log_func(f"[BATCH_ACCUM] Added track_id={track_id}, batch_size={batch_size_now}/{self.batch_size}, "
+                         f"elapsed={elapsed_ms:.0f}ms/{self.time_threshold_ms}ms")
+            
+            # Check if batch should be processed
+            should_process = (
+                batch_size_now >= self.batch_size or  # Size threshold reached
+                elapsed_ms >= self.time_threshold_ms   # Time threshold reached
+            )
+            
+            if should_process:
+                self.batch_event.set()
+                self.log_func(f"[BATCH_ACCUM] ✓ Batch trigger: size={batch_size_now} or time={elapsed_ms:.0f}ms")
+                return True
+            
+            return False
+    
+    def get_batch(self, wait_timeout_ms=None) -> dict:
+        """Get and clear pending batch.
+        
+        Args:
+            wait_timeout_ms: Wait up to this many milliseconds for batch to fill
+            
+        Returns:
+            dict: Current batch or empty dict if not ready
+        """
+        with self.batch_lock:
+            if wait_timeout_ms and not self.pending_batch:
+                self.batch_event.clear()
+                # Wait outside lock to avoid deadlock
+            
+            result = self.pending_batch.copy()
+            self.pending_batch.clear()
+            self.batch_start_time = None
+            self.batch_event.clear()
+            
+            if result:
+                self.log_func(f"[BATCH_ACCUM] Batch retrieved: size={len(result)}")
+            
+            return result
+    
+    def flush(self) -> dict:
+        """Force flush current batch regardless of size.
+        
+        Returns:
+            dict: Current batch (even if partial)
+        """
+        with self.batch_lock:
+            result = self.pending_batch.copy()
+            
+            if result:
+                elapsed = (datetime.now() - self.batch_start_time).total_seconds() * 1000 if self.batch_start_time else 0
+                self.log_func(f"[BATCH_ACCUM] ✓✓ Batch flushed: size={len(result)}, elapsed={elapsed:.0f}ms")
+            
+            self.pending_batch.clear()
+            self.batch_start_time = None
+            self.batch_event.clear()
+            
+            return result
+    
+    def get_batch_stats(self) -> dict:
+        """Get current batch statistics.
+        
+        Returns:
+            dict with batch info
+        """
+        with self.batch_lock:
+            elapsed_ms = (datetime.now() - self.batch_start_time).total_seconds() * 1000 if self.batch_start_time else 0
+            return {
+                'pending_items': len(self.pending_batch),
+                'elapsed_ms': elapsed_ms,
+                'total_processed': self.total_processed,
+                'total_batches': self.total_batches,
+                'is_processing': self.is_processing
+            }
+
+
+# Global batch accumulator instance
+_batch_accumulator = None
+
+
+def initialize_batch_accumulator(batch_size=8, time_threshold_ms=500):
+    """Initialize the global batch accumulator."""
+    global _batch_accumulator
+    if _batch_accumulator is None:
+        _batch_accumulator = BatchAccumulator(
+            batch_size=batch_size,
+            time_threshold_ms=time_threshold_ms
+        )
+    return _batch_accumulator
+
+
+def get_batch_accumulator():
+    """Get the global batch accumulator instance."""
+    global _batch_accumulator
+    if _batch_accumulator is None:
+        _batch_accumulator = BatchAccumulator()
+    return _batch_accumulator
+
+
 def _ensure_log_dir():
     """Ensure logs directory exists."""
     log_dir = Path("logs")
@@ -536,3 +713,245 @@ def submit_plate_detection_async(
         # Fallback: call callback with None
         if callback:
             callback({"text": None, "count": None})
+
+
+# ============================================================================
+# Batch Detection and OCR Functions for Approach 2
+# ============================================================================
+
+def batch_detect_license_plates(
+    plate_model: YOLO,
+    vehicle_frames_dict: dict,  # {track_id: frame}
+    ocr_reader,
+    model_lock,
+    detection_config: dict
+) -> dict:  # {track_id: {text, count}}
+    """
+    Batch detect license plates in multiple vehicles and run OCR in batch.
+    
+    This is the core function for Approach 2 batch processing.
+    Optimized for multi-GPU/multi-core processing.
+    
+    Args:
+        plate_model: YOLOv8 model for plate detection
+        vehicle_frames_dict: Dict of {track_id: vehicle_frame}
+        ocr_reader: OCR reader instance
+        model_lock: Thread lock for model inference
+        detection_config: Config dict with detection parameters
+    
+    Returns:
+        Dict of {track_id: {text, count, boxes}} with detection and OCR results
+    """
+    start_time = datetime.now()
+    batch_results = {}
+    
+    _log(f"[BATCH_DETECT] Starting batch processing: {len(vehicle_frames_dict)} vehicles")
+    
+    try:
+        # Step 1: Detect plates in all vehicles
+        _log(f"[BATCH_DETECT] Step 1: Running plate detection on {len(vehicle_frames_dict)} vehicles...")
+        
+        plate_detections = {}  # {track_id: {boxes, num_detections, frame}}
+        detection_time_start = datetime.now()
+        
+        with model_lock:
+            for track_id, frame in vehicle_frames_dict.items():
+                try:
+                    _log(f"[BATCH_DETECT]   track_id={track_id} Running detection...")
+                    
+                    results = _sync_plate_inference(plate_model, frame, model_lock)
+                    
+                    if results is None:
+                        plate_detections[track_id] = {
+                            'boxes': None,
+                            'num_detections': 0,
+                            'frame': frame
+                        }
+                        continue
+                    
+                    boxes = results.boxes
+                    num_detections = len(boxes) if boxes is not None else 0
+                    
+                    plate_detections[track_id] = {
+                        'boxes': boxes,
+                        'num_detections': num_detections,
+                        'frame': frame
+                    }
+                    
+                    _log(f"[BATCH_DETECT]   track_id={track_id} ✓ Detected {num_detections} plates")
+                except Exception as det_err:
+                    _log(f"[BATCH_DETECT]   track_id={track_id} ❌ Detection error: {det_err}")
+                    plate_detections[track_id] = {
+                        'boxes': None,
+                        'num_detections': 0,
+                        'frame': frame
+                    }
+        
+        detection_time = (datetime.now() - detection_time_start).total_seconds() * 1000
+        _log(f"[BATCH_DETECT] Step 1 complete: Detection took {detection_time:.1f}ms")
+        
+        # Step 2: Extract best plate crops from all detections
+        _log(f"[BATCH_DETECT] Step 2: Extracting plate crops...")
+        
+        plate_crops_dict = {}  # {track_id: plate_image}
+        metadata_dict = {}     # {track_id: {num_detections, confidence}}
+        
+        for track_id, detection in plate_detections.items():
+            boxes = detection['boxes']
+            num_detections = detection['num_detections']
+            frame = detection['frame']
+            
+            if num_detections > 0 and boxes is not None:
+                try:
+                    # Get best detection (highest confidence)
+                    best_box = boxes[0]
+                    confidence = float(best_box.conf[0])
+                    x1, y1, x2, y2 = map(int, best_box.xyxy[0].tolist())
+                    
+                    # Validate and clip coordinates
+                    frame_height, frame_width = frame.shape[:2]
+                    x1 = max(0, min(x1, frame_width - 1))
+                    y1 = max(0, min(y1, frame_height - 1))
+                    x2 = max(x1 + 1, min(x2, frame_width))
+                    y2 = max(y1 + 1, min(y2, frame_height))
+                    
+                    # Extract plate
+                    plate_image = frame[y1:y2, x1:x2]
+                    
+                    if plate_image.size > 0:
+                        plate_crops_dict[track_id] = plate_image
+                        metadata_dict[track_id] = {
+                            'num_detections': num_detections,
+                            'confidence': confidence,
+                            'bbox': (x1, y1, x2, y2)
+                        }
+                        _log(f"[BATCH_DETECT]   track_id={track_id} ✓ Extracted plate crop (conf={confidence:.3f})")
+                    else:
+                        metadata_dict[track_id] = {
+                            'num_detections': num_detections,
+                            'confidence': confidence,
+                            'bbox': None
+                        }
+                        _log(f"[BATCH_DETECT]   track_id={track_id} ⚠ Plate crop empty")
+                except Exception as extract_err:
+                    _log(f"[BATCH_DETECT]   track_id={track_id} ❌ Crop extraction error: {extract_err}")
+                    metadata_dict[track_id] = {
+                        'num_detections': num_detections,
+                        'confidence': 0,
+                        'bbox': None
+                    }
+            else:
+                metadata_dict[track_id] = {
+                    'num_detections': num_detections,
+                    'confidence': 0,
+                    'bbox': None
+                }
+        
+        _log(f"[BATCH_DETECT] Step 2 complete: Extracted {len(plate_crops_dict)} plate crops")
+        
+        # Step 3: Batch OCR all detected plates
+        _log(f"[BATCH_DETECT] Step 3: Running batch OCR on {len(plate_crops_dict)} plates...")
+        
+        ocr_time_start = datetime.now()
+        batch_ocr_results = _batch_ocr_plates(ocr_reader, plate_crops_dict, model_lock)
+        ocr_time = (datetime.now() - ocr_time_start).total_seconds() * 1000
+        
+        _log(f"[BATCH_DETECT] Step 3 complete: OCR took {ocr_time:.1f}ms")
+        
+        # Step 4: Combine results
+        _log(f"[BATCH_DETECT] Step 4: Combining results...")
+        
+        for track_id in vehicle_frames_dict.keys():
+            if track_id in plate_crops_dict:
+                ocr_text = batch_ocr_results.get(track_id, "unknown")
+                num_detections = metadata_dict[track_id]['num_detections']
+                batch_results[track_id] = {
+                    'text': ocr_text,
+                    'count': num_detections,
+                    'confidence': metadata_dict[track_id]['confidence']
+                }
+                _log(f"[BATCH_DETECT]   track_id={track_id} Result: text='{ocr_text}', count={num_detections}")
+            else:
+                # No valid plate crops
+                batch_results[track_id] = {
+                    'text': None,
+                    'count': metadata_dict.get(track_id, {}).get('num_detections', 0),
+                    'confidence': 0
+                }
+        
+        total_time = (datetime.now() - start_time).total_seconds() * 1000
+        _log(f"[BATCH_DETECT] ✓ Batch processing complete: {len(batch_results)} vehicles, "
+             f"detection={detection_time:.1f}ms, ocr={ocr_time:.1f}ms, total={total_time:.1f}ms")
+        
+        return batch_results
+        
+    except Exception as e:
+        _log(f"[BATCH_DETECT] ❌ Error in batch processing: {e}")
+        import traceback
+        _log(f"[BATCH_DETECT] Traceback: {traceback.format_exc()}")
+        
+        # Return partial results for vehicles we did process
+        return batch_results
+
+
+def _batch_ocr_plates(ocr_reader, plate_crops_dict: dict, model_lock) -> dict:
+    """
+    Run OCR on multiple plate crops in batch.
+    
+    Args:
+        ocr_reader: OCR reader instance
+        plate_crops_dict: Dict of {track_id: plate_image}
+        model_lock: Thread lock for model access
+    
+    Returns:
+        Dict of {track_id: ocr_text}
+    """
+    results = {}
+    
+    if not ocr_reader:
+        _log(f"[BATCH_OCR] ⚠ OCR reader is None, skipping batch OCR")
+        for track_id in plate_crops_dict.keys():
+            results[track_id] = "unknown"
+        return results
+    
+    try:
+        # Check if OCR reader supports batch processing
+        if hasattr(ocr_reader, 'read_license_plate_batch'):
+            _log(f"[BATCH_OCR] Using native batch OCR processing...")
+            
+            with model_lock:
+                plate_images = list(plate_crops_dict.values())
+                track_ids = list(plate_crops_dict.keys())
+                
+                batch_results = ocr_reader.read_license_plate_batch(plate_images)
+                
+                for track_id, ocr_text in zip(track_ids, batch_results):
+                    results[track_id] = ocr_text if ocr_text else "unknown"
+                    _log(f"[BATCH_OCR]   track_id={track_id} Result: '{results[track_id]}'")
+        else:
+            # Fallback: Sequential OCR but keep lock contention minimal
+            _log(f"[BATCH_OCR] OCR reader doesn't support batch, running sequential OCR under single lock...")
+            
+            with model_lock:
+                for track_id, plate_image in plate_crops_dict.items():
+                    try:
+                        ocr_text = ocr_reader.read_license_plate(plate_image)
+                        results[track_id] = ocr_text if ocr_text else "unknown"
+                        _log(f"[BATCH_OCR]   track_id={track_id} Result: '{results[track_id]}'")
+                    except Exception as ocr_err:
+                        _log(f"[BATCH_OCR]   track_id={track_id} ❌ OCR error: {ocr_err}")
+                        results[track_id] = "unknown"
+        
+        _log(f"[BATCH_OCR] ✓ Batch OCR complete: {len(results)} results")
+        return results
+        
+    except Exception as e:
+        _log(f"[BATCH_OCR] ❌ Error in batch OCR: {e}")
+        import traceback
+        _log(f"[BATCH_OCR] Traceback: {traceback.format_exc()}")
+        
+        # Return defaults for all
+        for track_id in plate_crops_dict.keys():
+            results[track_id] = "unknown"
+        
+        return results
