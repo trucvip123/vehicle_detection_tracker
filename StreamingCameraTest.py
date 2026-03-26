@@ -22,25 +22,6 @@ def main():
     # Để tránh mờ hình, không resize (giữ nguyên kích thước gốc từ camera/RTSP).
     tracker = VehicleDetectionTracker()
 
-    # ===== FRAME QUALITY VALIDATION SETUP =====
-    # Frame quality validation is enabled by default
-    # You can customize the thresholds for your environment
-    
-    print("[SETUP] Frame quality validation is ENABLED")
-    print("[SETUP] Default thresholds:")
-    print("  - Brightness: 40-210 (optimal: 80-180)")
-    print("  - Blur variance (Laplacian): >= 100 (higher = sharper)")
-    print("  - Contrast (std dev): >= 15 (higher = more detail)")
-    print("  - Entropy: >= 3.0 (higher = more information)")
-    print("  - Overall quality score: >= 50.0/100")
-    
-    # To adjust thresholds for low-light environment, uncomment:
-    # tracker.frame_processor.set_quality_thresholds(
-    #     brightness_min=25.0,      # Allow darker images
-    #     blur_variance_min=80.0,   # More lenient on blur
-    #     quality_threshold=40.0,   # Lower overall threshold
-    # )
-    
     # To disable frame quality validation, uncomment:
     # tracker.frame_processor.set_quality_validation(False)
     

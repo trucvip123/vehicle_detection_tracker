@@ -19,14 +19,16 @@ from VehicleDetectionTracker.frame_quality import (
     get_frame_quality_summary,
 )
 from VehicleDetectionTracker.metrics import get_metrics_collector
+from VehicleDetectionTracker.performance_timing import time_block
 
 
 class FrameProcessor:
     """Handles vehicle detection and tracking in frames."""
 
-    def __init__(self, model: Any, log_func: Callable[[str], None]) -> None:
+    def __init__(self, model: Any, log_func: Callable[[str], None], gpu_optimizer=None) -> None:
         self.model = model
         self.log = log_func
+        self.gpu_optimizer = gpu_optimizer  # GPU optimization module
         self.metrics = get_metrics_collector()  # Get metrics collector instance
 
         # Tracking data
@@ -63,6 +65,36 @@ class FrameProcessor:
         self._frames_rejected = 0  # Track rejected frames
         self._frames_processed = 0  # Track processed frames
 
+    def enable_gpu_optimization(self, width: int, height: int):
+        """
+        Enable GPU optimization with resolution downscaling
+        
+        Args:
+            width: Inference width (e.g., 1280, 960, 640)
+            height: Inference height (e.g., 720, 540, 360)
+            
+        Performance impact (on GTX 1650 with RTSP 2880x1620):
+          (1280, 720): ~18 FPS (balanced - default)
+          (960, 540):  ~25 FPS (faster)
+          (640, 360):  ~35 FPS (fastest)
+        """
+        if self.gpu_optimizer:
+            self.gpu_optimizer.set_inference_resolution(width, height)
+            self.log(f"[GPU] Inference resolution set to {width}x{height}")
+            return True
+        return False
+    
+    def get_gpu_optimization_status(self) -> Dict[str, Any]:
+        """Get GPU optimization status"""
+        if not self.gpu_optimizer:
+            return {"enabled": False, "reason": "GPU optimizer not initialized"}
+        
+        return {
+            "enabled": self.gpu_optimizer.use_gpu,
+            "device": self.gpu_optimizer.device if self.gpu_optimizer.use_gpu else "CPU",
+            "inference_resolution": self.gpu_optimizer.inference_resolution,
+        }
+
     def process_frame_streaming(self, frame: np.ndarray, frame_timestamp: datetime, plate_processor: Any) -> np.ndarray:
         """
         Optimized frame processing for streaming: Fast detection, background OCR.
@@ -82,36 +114,8 @@ class FrameProcessor:
         # Check and reset daily tracking at start of each day
         plate_processor.check_and_reset_daily_tracking()
         
-        # ===== FRAME QUALITY VALIDATION =====
-        if self.quality_enabled:
-            should_process, quality_metrics = should_process_frame(
-                frame,
-                quality_threshold=self.quality_threshold,
-                brightness_min=self.brightness_min,
-                brightness_max=self.brightness_max,
-                blur_variance_min=self.blur_variance_min,
-                contrast_min=self.contrast_min,
-                entropy_min=self.entropy_min,
-                log_func=self.log,
-            )
-            
-            if not should_process:
-                self._frames_rejected += 1
-                quality_summary = get_frame_quality_summary(quality_metrics)
-                self.log(f"{quality_summary} [REJECTED]")
-                # Record frame quality rejection in metrics
-                frame_processing_time = time.time() - frame_processing_time_start
-                self.metrics.record_frame_processed(
-                    frame_processing_time,
-                    is_quality_rejected=True,
-                    issues=quality_metrics.get("issues", [])
-                )
-                return frame
-            
-            self._frames_processed += 1
-        
-        # ===== END FRAME QUALITY VALIDATION =====
-        
+        # === VEHICLE DETECTION TIMING ===
+        # with time_block("[VEHICLE_DETECT]", self.log):
         tracking_config = get_tracking_config()
         results = self.model.track(
             frame,
@@ -169,9 +173,9 @@ class FrameProcessor:
             for box, track_id, class_id in zip(boxes, track_ids, class_id_list):
                 class_name = coco_class_map.get(class_id, str(class_id))
                 x, y, w, h = box
-                print(
-                    f"[DEBUG] Processing track_id={track_id}, class_id={class_id}, box=({x},{y},{w},{h})"
-                )
+                # print(
+                #     f"[DEBUG] Processing track_id={track_id}, class_id={class_id}, box=({x},{y},{w},{h})"
+                # )
                 if w < 230 or h < 90 or y - h / 2 < 10:
                     continue
 
@@ -344,7 +348,7 @@ class FrameProcessor:
             reassigned=False
         )
         
-        return frame
+        # return frame
     
     def _cleanup_old_vehicle_data(self, current_timestamp: datetime, plate_processor: Any) -> None:
         """
@@ -355,6 +359,8 @@ class FrameProcessor:
             current_timestamp (datetime): Current frame timestamp
             plate_processor: PlateProcessor instance to check vehicle_last_seen
         """
+        # === TIME BLOCK: CLEANUP CHECK ===
+        # with time_block("[CLEANUP_CHECK]", self.log):
         # Only run cleanup every _cleanup_interval seconds
         time_since_cleanup = (current_timestamp - self._last_cleanup).total_seconds()
         if time_since_cleanup < self._cleanup_interval:
@@ -362,6 +368,8 @@ class FrameProcessor:
         
         self._last_cleanup = current_timestamp
         
+        # === TIME BLOCK: FIND EXPIRED VEHICLES ===
+        # with time_block("[CLEANUP_FIND]", self.log):
         # Find vehicles to remove (not seen for >_vehicle_timeout seconds)
         vehicles_to_remove = []
         for track_id, ts_data in self.vehicle_timestamps.items():
@@ -371,10 +379,12 @@ class FrameProcessor:
                 
                 if time_since_seen > self._vehicle_timeout:
                     vehicles_to_remove.append((track_id, time_since_seen))
-        
+    
+        # === TIME BLOCK: REMOVE OLD VEHICLES ===
+        # with time_block("[CLEANUP_REMOVE]", self.log):
         # Remove old vehicles
         if vehicles_to_remove:
-            self.log(f"[MEMORY_CLEANUP] Cleaning up {len(vehicles_to_remove)} old vehicles")
+            # self.log(f"[MEMORY_CLEANUP] Cleaning up {len(vehicles_to_remove)} old vehicles")
             for track_id, time_since_seen in vehicles_to_remove:
                 # Get memory stats before cleanup
                 num_positions = len(self.vehicle_timestamps[track_id]["positions"])
@@ -385,7 +395,7 @@ class FrameProcessor:
                 if track_id in self.track_history:
                     del self.track_history[track_id]
                 
-                self.log(f"[MEMORY_CLEANUP] vehicle_id={track_id} removed (inactive for {time_since_seen:.0f}s, freed {num_positions} positions, {num_timestamps} timestamps)")
+                # self.log(f"[MEMORY_CLEANUP] vehicle_id={track_id} removed (inactive for {time_since_seen:.0f}s, freed {num_positions} positions, {num_timestamps} timestamps)")
         
         # Log memory stats only when state changes (avoid spam logs every cleanup cycle)
         total_vehicles = len(self.vehicle_timestamps)
@@ -393,7 +403,7 @@ class FrameProcessor:
         current_state = (total_vehicles, total_positions)
         
         if current_state != self._last_cleanup_state:
-            self.log(f"[MEMORY_CLEANUP] Current state: {total_vehicles} vehicles, {total_positions} total positions in memory")
+            # self.log(f"[MEMORY_CLEANUP] Current state: {total_vehicles} vehicles, {total_positions} total positions in memory")
             self._last_cleanup_state = current_state
 
     def set_quality_validation(self, enabled: bool) -> None:

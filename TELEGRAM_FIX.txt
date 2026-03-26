@@ -1,0 +1,81 @@
+================================================================================
+                    TELEGRAM NOTIFICATIONS - FIX
+================================================================================
+
+PROBLEM: 
+  Why is Telegram not sending notifications?
+
+ROOT CAUSE: 
+  You were using GPU MODE (fast detection only)
+  Not TRACKER MODE (which includes Telegram alerts)
+
+PROOF (Test Ran Successfully):
+  ✅ Telegram test sent successfully
+  ✅ Message ID: 1602
+  ✅ Bot token: CONFIGURED
+  ✅ Group chat ID: CONFIGURED
+
+================================================================================
+
+                           THE FIX (3 MODES)
+================================================================================
+
+Mode 1: TEST (Verify Setup)
+  Command:  python VehicleDetectionPipeline_Integrated.py test
+  Speed:    30+ FPS
+  Telegram: ❌ NO
+  Purpose:  Quick verification
+
+Mode 2: GPU (Real-time Monitoring)  
+  Command:  python VehicleDetectionPipeline_Integrated.py gpu
+  Speed:    15-20 FPS
+  Telegram: ❌ NO
+  Purpose:  Live display, no alerts
+
+Mode 3: TRACKER (With Telegram Alerts) ⭐ WHAT YOU NEED
+  Command:  python VehicleDetectionPipeline_Integrated.py tracker
+  Speed:    8-12 FPS
+  Telegram: ✅ YES
+  Purpose:  Production with alerts
+
+================================================================================
+
+                        DEPLOY WITH TELEGRAM
+================================================================================
+
+Step 1: Run tracker mode
+  $ conda activate ocr_env_py312_gpu
+  $ python VehicleDetectionPipeline_Integrated.py tracker
+
+Step 2: Wait for vehicle detections
+  Console will show:
+  [VEHICLE] Vehicle_001 detected
+    Plate: ABC123XY
+    Sending Telegram...
+  📱 Telegram: ✓ SENT
+
+Step 3: Check Telegram group
+  You will receive alert:
+  "Phát hiện biển số xe ABC123XY đi vào khu vực mỏ lúc 23:53:44 !"
+
+================================================================================
+
+                         QUICK COMPARISON
+================================================================================
+
+              TEST          GPU           TRACKER
+  ──────────────────────────────────────────────
+  Speed:        30+ FPS      15-20 FPS      8-12 FPS
+  Telegram:     ❌           ❌             ✅
+  DCR Plate?    ✓            ✓              ✓
+  OCR Text?     ✗            ✗              ✓
+  Tracking?     ✗            ✗              ✓
+  Use:          Verify       Monitor        Production
+
+================================================================================
+
+                           RUN NOW:
+                           
+  python VehicleDetectionPipeline_Integrated.py tracker
+
+================================================================================

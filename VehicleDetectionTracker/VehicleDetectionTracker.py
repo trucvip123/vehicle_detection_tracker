@@ -36,6 +36,8 @@ from VehicleDetectionTracker.frame_processor import FrameProcessor
 from VehicleDetectionTracker.stream_handler import StreamHandler
 from VehicleDetectionTracker.image_utils_helper import draw_plate_text_corner
 from VehicleDetectionTracker.metrics import get_metrics_collector
+from VehicleDetectionTracker.performance_timing import time_block
+from VehicleDetectionTracker.gpu_optimizer import GPUOptimizer, PerformanceMonitor, OptimizedTracking
 
 logging.getLogger("ultralytics").setLevel(logging.WARNING)
 logging.getLogger("paddleocr").setLevel(logging.WARNING)
@@ -53,8 +55,6 @@ class VehicleDetectionTracker:
 
     def __init__(
         self,
-        model_path="yolov8n.pt",
-        excel_output_path="vehicle_data.xlsx",
         initialize_all_models=True,
         use_gpu=None,
     ):
@@ -62,8 +62,6 @@ class VehicleDetectionTracker:
         Initialize the VehicleDetection class.
 
         Args:
-            model_path (str): Path to the YOLO model file.
-            excel_output_path (str): Path to Excel file for saving vehicle data.
             initialize_all_models (bool): If True, initialize all models immediately.
         """
         log("Initializing Vehicle Detection Tracker...")
@@ -75,10 +73,7 @@ class VehicleDetectionTracker:
         advanced_config = get_advanced_config()
 
         # Override with parameters
-        model_path = model_path or paths_config.get("yolo_model", "yolov8n.pt")
-        excel_output_path = excel_output_path or paths_config.get(
-            "excel_output", "vehicle_data.xlsx"
-        )
+        vehicle_model_path = paths_config.get("yolo_model", "yolov8n.pt")
         plate_model_path = paths_config.get("plate_model", "model/LP_detector.pt")
         initialize_all_models = (
             initialize_all_models
@@ -92,12 +87,25 @@ class VehicleDetectionTracker:
         else:
             self.device, self.use_gpu = get_device(log)
 
+        # Initialize GPU optimizer for performance improvements
+        self.gpu_optimizer = GPUOptimizer(device=self.device, use_gpu=self.use_gpu)
+        
+        # Set inference resolution for faster processing (optional)
+        # Uncomment to enable resolution downscaling (huge FPS improvement)
+        # self.gpu_optimizer.set_inference_resolution(1280, 720)  # Downscale to 1280x720 for inference
+        # Supported resolutions:
+        #   (1280, 720): ~18 FPS on RTSP (balanced)
+        #   (960, 540):  ~25 FPS on RTSP (faster)
+        #   (640, 360):  ~35 FPS on RTSP (very fast)
+        
+        self.performance_monitor = PerformanceMonitor()
+
         # Store paths for later use
         self.plate_model_path = plate_model_path
 
         # Load YOLO model
         log("Loading YOLO vehicle detection model...")
-        self.model = YOLO(model_path)
+        self.model = YOLO(vehicle_model_path)
         if self.use_gpu:
             self.model.to(self.device)
             log(f"✓ YOLO model loaded on GPU")
@@ -110,12 +118,9 @@ class VehicleDetectionTracker:
 
         # Thread pool for async operations
         threading_config = get_threading_config()
-        max_workers = threading_config.get("max_workers", 4)
+        max_workers = threading_config.get("max_workers", 5)
         log(f"Initializing thread pool with max_workers={max_workers}...")
         self._executor = ThreadPoolExecutor(max_workers=max_workers)
-
-        # Initialize Excel manager
-        self.excel_manager = ExcelManager(excel_output_path, log)
 
         # Initialize OCR reader first (before creating plate_processor)
         self.ocr_reader = None
@@ -125,7 +130,7 @@ class VehicleDetectionTracker:
         self.plate_processor = PlateProcessor(
             self.plate_model, self.ocr_reader, self._executor, log
         )
-        self.frame_processor = FrameProcessor(self.model, log)
+        self.frame_processor = FrameProcessor(self.model, log, gpu_optimizer=self.gpu_optimizer)
         self.stream_handler = StreamHandler(log, self.plate_processor)
 
         # Initialize metrics collector
@@ -191,24 +196,6 @@ class VehicleDetectionTracker:
             "ocr_reader": self.ocr_reader is not None,
         }
 
-    def process_frame_streaming(self, frame, frame_timestamp):
-        """
-        Optimized frame processing for streaming.
-
-        Args:
-            frame (numpy.ndarray): Input frame for processing.
-            frame_timestamp (datetime): Timestamp of the frame.
-
-        Returns:
-            numpy.ndarray: Frame with license plates displayed.
-        """
-        display_frame = self.frame_processor.process_frame_streaming(
-            frame, frame_timestamp, self.plate_processor
-        )
-        return draw_plate_text_corner(
-            display_frame, self.plate_processor.vehicle_plates
-        )
-
     def process_video_streaming(
         self,
         video_path,
@@ -225,6 +212,8 @@ class VehicleDetectionTracker:
             max_reconnect_attempts (int): Maximum reconnect attempts
             reconnect_delay (int): Delay in seconds between reconnects
         """
+        # === TIME BLOCK: OVERALL STREAMING ===
+        # with time_block("[STREAM_TOTAL]", log):
         self.stream_handler.process_video_stream(
             video_path,
             self.frame_processor,

@@ -5,6 +5,7 @@ import threading
 import cv2
 import json
 import os
+import time
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, wait, ALL_COMPLETED
 from typing import Dict, Set, Optional, Tuple, Callable, Any, List
@@ -24,6 +25,7 @@ from VehicleDetectionTracker.vehicle_summary import (
     merge_similar_plates,
 )
 from VehicleDetectionTracker.metrics import get_metrics_collector
+from VehicleDetectionTracker.performance_timing import time_block
 
 
 # Global sets to track vehicle notifications
@@ -447,6 +449,8 @@ class PlateProcessor:
                     self.log(f"[PLATE] vehicle_id={track_id} Vehicle already has notification sent, skipping background processing (stale task)")
                     return
             
+            # === TIME BLOCK: STATE UPDATE ===
+            # with time_block(f"[STATE_UPDATE] vehicle_id={track_id}", self.log):
             # Update last_seen timestamp and direction (thread-safe)
             with self._state_lock:
                 if frame_timestamp:
@@ -459,6 +463,8 @@ class PlateProcessor:
                 elif track_id not in self.vehicle_directions:
                     self.vehicle_directions[track_id] = "Unknown"
 
+            # === TIME BLOCK: PLATE DETECTION SUBMISSION ===
+            # with time_block(f"[SUBMIT_PLATE] vehicle_id={track_id}", self.log):
             # Submit plate detection to inference queue asynchronously
             # This avoids model_lock bottleneck by queuing tasks
             self.log(f"[PLATE] vehicle_id={track_id} Submitting plate detection to inference queue...")
@@ -491,7 +497,7 @@ class PlateProcessor:
                 vehicle_dir=vehicle_dir,
                 track_id=track_id,
             )
-            
+        
         except Exception as e:
             self.log(f"[PLATE] vehicle_id={track_id} ✗ Detection error: {e}")
             import traceback
@@ -523,6 +529,9 @@ class PlateProcessor:
             plate_detection_start = time_module.time()
             
             self.log(f"[PLATE_RESULT] vehicle_id={track_id} Processing plate result (ENTRY)")
+            
+            # === TIME BLOCK: PARSE DETECTION RESULT ===
+            # with time_block(f"[PARSE_RESULT] vehicle_id={track_id}", self.log):
             plate_text = license_plate_info.get("text") if license_plate_info else None
             count_detections = license_plate_info.get("count") if license_plate_info else 0
             confidence = license_plate_info.get("confidence", 0.0) if license_plate_info else 0.0
@@ -532,6 +541,8 @@ class PlateProcessor:
             self.log(f"[PLATE_RESULT] vehicle_id={track_id} Detection result: plate={plate_text}, count={count_detections}, confidence={confidence:.3f}")
             log_plate(track_id, f"detected_plate={plate_text}")
             
+            # === TIME BLOCK: DIRECTION CHECK ===
+            # with time_block(f"[DIRECTION_CHECK] vehicle_id={track_id}", self.log):
             # Only send notifications for vehicles entering (not exiting)
             # Must contain "bottom" to be confirmed as entering
             # Skip if direction contains "top" (exit/ra khỏi) or is "Unknown"
@@ -549,6 +560,8 @@ class PlateProcessor:
             
             # CHANGED: Only accumulate plate data, don't send notification immediately
             # Notifications will be sent when vehicle disappears (in frame_processor.py)
+            # === TIME BLOCK: ACCUMULATE PLATE DATA ===
+            # with time_block(f"[ACCUMULATE] vehicle_id={track_id}", self.log):
             with _vehicle_telegram_sent_lock:
                 # SECOND CHECK: Skip if already notified (double-check before accumulating)
                 if track_id in _vehicle_telegram_sent_with_plate or track_id in _vehicle_telegram_sent_without_plate:
@@ -648,6 +661,8 @@ class PlateProcessor:
                     #         self.vehicle_plate_counts[effective_track_id][plate_text] = 1
                     #         self.log(f"[PLATE] vehicle_id={effective_track_id} Added to plate_counts: {plate_text}")
                     
+                    # === TIME BLOCK: SAVE DETECTED IMAGE ===
+                    # with time_block(f"[SAVE_IMAGE] vehicle_id={effective_track_id}", self.log):
                     # Save vehicle frame for later use in final notification
                     # Store detected frame with plate info in filename
                     os.makedirs(vehicle_dir, exist_ok=True)
@@ -676,7 +691,6 @@ class PlateProcessor:
                     
                     log_plate(effective_track_id, f"Saved detected plate image: {detected_image_name}")
                     self.log(f"[PLATE] vehicle_id={effective_track_id} ✓ Accumulated plate detection: {plate_text}, images saved")
-                    
                     # vehicle_plate_counts is only used for end-of-day summary calculations
                     # Notification will be sent using vehicle_plates when all background tasks complete (via _on_plate_task_complete callback)
         except Exception as e:
@@ -1398,6 +1412,8 @@ class PlateProcessor:
                 # Send final notification with best plate (OUTSIDE of lock)
                 self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} ► Calling Telegram API with image_path={image_path}...")
                 try:
+                    # === TIME BLOCK: TELEGRAM SEND ===
+                    # with time_block(f"[TELEGRAM_SEND] vehicle_id={track_id}", self.log):
                     telegram_response = send_notify_to_telegram(
                         plate_text,
                         direction_label,
@@ -1427,6 +1443,8 @@ class PlateProcessor:
                     notification_sent = False
             
             if notification_sent:
+                # === TIME BLOCK: SAVE STATE ===
+                # with time_block(f"[SAVE_STATE] vehicle_id={track_id}", self.log):
                 self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} Saving state (Telegram API was successful)...")
                 self._save_state()
                 self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} ✓ State saved")

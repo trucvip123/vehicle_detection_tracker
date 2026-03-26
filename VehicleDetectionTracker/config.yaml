@@ -153,7 +153,9 @@ threading:
 # ============================================
 paths:
   # Đường dẫn đến model YOLO vehicle detection
-  yolo_model: "model/yolov8n.pt"
+  # OPTIMIZED FOR PRODUCTION (March 25, 2026)
+  # Changed from: "model/yolov8n.pt" (baseline)
+  yolo_model: "yolov8n_int8.pt"
   
   # Đường dẫn đến model license plate detector
   plate_model: "model/license_plate_detector.pt"
@@ -176,7 +178,7 @@ display:
   
   # Kích thước frame mục tiêu cho streaming (width, height)
   # null = không resize, giữ nguyên kích thước gốc
-  # stream_frame_size: (1920, 1080)  # Ví dụ: [1280, 720]
+  stream_frame_size: (960, 540)  # Ví dụ: [1280, 720] 
 
 # ============================================
 # Operating Hours Settings (Thời gian vận hành)
@@ -188,7 +190,7 @@ operating_hours:
   
   # Giờ bắt đầu xử lý (định dạng 24h: 0-23)
   # Ví dụ: 6 = 6:00 AM
-  start_hour: 6
+  start_hour: 23
   
   # Giờ kết thúc xử lý (định dạng 24h: 0-23)
   # Ví dụ: 18 = 6:00 PM
