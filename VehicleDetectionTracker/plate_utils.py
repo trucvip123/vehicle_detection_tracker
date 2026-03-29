@@ -162,7 +162,7 @@ def get_inference_queue():
     """Get the global inference queue instance."""
     global _inference_queue
     if _inference_queue is None:
-        _inference_queue = InferenceQueue(num_workers=5)
+        _inference_queue = InferenceQueue(num_workers=6)
     return _inference_queue
 
 

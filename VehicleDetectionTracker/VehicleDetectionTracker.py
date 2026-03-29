@@ -151,6 +151,9 @@ class VehicleDetectionTracker:
         log("✓ License plate detector loaded")
 
         log("✓ All initialization complete!")
+        
+        # Log today's total vehicles
+        self._log_today_vehicles_summary()
 
     def _initialize_plate_detector(self):
         """Initialize the license plate detector model."""
@@ -173,6 +176,58 @@ class VehicleDetectionTracker:
             # Update plate_processor if it exists
             if hasattr(self, "plate_processor") and self.plate_processor:
                 self.plate_processor.ocr_reader = self.ocr_reader
+
+    def _log_today_vehicles_summary(self):
+        """Log the total number of vehicles that entered today during initialization."""
+        try:
+            from VehicleDetectionTracker.vehicle_summary import get_today_vehicles_summary
+            
+            # Get vehicle state from plate_processor (thread-safe)
+            vehicle_plates = self.plate_processor.get_vehicle_plates_copy()
+            vehicle_directions = self.plate_processor.get_vehicle_directions_copy()
+            vehicle_last_seen = self.plate_processor.get_vehicle_last_seen_copy()
+            
+            # Count all vehicles entering (direction contains "bottom")
+            all_entering_vehicles = [
+                tid for tid, direction in vehicle_directions.items()
+                if "bottom" in direction.lower()
+            ]
+            total_all_entering = len(all_entering_vehicles)
+            
+            # Get today's vehicles summary (with plates detected)
+            today_summary = get_today_vehicles_summary(
+                vehicle_last_seen,
+                vehicle_directions,
+                vehicle_plates,
+                log_func=log
+            )
+            
+            total_with_plates = len(today_summary)
+            total_without_plates = total_all_entering - total_with_plates
+            
+            # Display comprehensive summary
+            log("\n" + "="*80)
+            log(f"📊 TODAY'S VEHICLE SUMMARY")
+            log("="*80)
+            log(f"🚗 Total vehicles entered: {total_all_entering}")
+            log(f"   ✓ With plates identified: {total_with_plates}")
+            log(f"   ✗ Without plates: {total_without_plates}")
+            log("-"*80)
+            
+            if total_with_plates > 0:
+                log("📋 PLATE BREAKDOWN:")
+                # Log each vehicle with its plate count
+                for plate_text, count in today_summary:
+                    # Handle None plate_text gracefully
+                    plate_display = str(plate_text) if plate_text else "UNKNOWN"
+                    log(f"   🚗 {plate_display:15s} : {count:2d} vehicle(s)")
+            
+            log("="*80 + "\n")
+                
+        except Exception as e:
+            log(f"⚠ Error logging today's vehicles summary: {e}")
+            import traceback
+            log(traceback.format_exc())
 
     def ensure_all_models_initialized(self):
         """Ensure all models are initialized."""

@@ -95,13 +95,13 @@ class PlateProcessor:
         #   - vehicle_detected_plate_images
         #   Use RLock to allow reentrant locking (same thread can acquire multiple times)
         self._state_lock = threading.RLock()
-        self._last_reset_date = None  # Track last reset date for daily reset
+        self._last_reset_date = datetime.now().strftime("%Y%m%d")  # Initialize to today to prevent immediate reset
         
         # Create state directory if it doesn't exist
         os.makedirs(self.state_dir, exist_ok=True)
 
         # Initialize inference queue for async plate detection (reduces model_lock contention)
-        initialize_inference_queue(num_workers=5)
+        initialize_inference_queue(num_workers=6)
         self.log("[PLATE_PROCESSOR] ✓ Initialized inference queue with 2 worker threads")
 
         # Initialize batch accumulator for async batch OCR (Approach 2)
@@ -1505,6 +1505,32 @@ class PlateProcessor:
                         if track_id in valid_track_ids:
                             self.vehicle_plate_counts[track_id] = plate_counts
 
+                # Restore vehicle_directions
+                if "vehicle_directions" in state:
+                    for track_id_str, direction in state["vehicle_directions"].items():
+                        track_id = int(track_id_str)
+                        if track_id in valid_track_ids:
+                            self.vehicle_directions[track_id] = direction
+                    self.log(f"[PERSIST] Restored vehicle_directions: {len(self.vehicle_directions)} vehicles")
+                else:
+                    # BACKWARD COMPATIBILITY: Old state files don't have vehicle_directions
+                    # Set default direction for all vehicles (assume they entered)
+                    self.log(f"[PERSIST] ⚠ Old state file format (no vehicle_directions). Setting default direction for all vehicles...")
+                    for track_id in valid_track_ids:
+                        self.vehicle_directions[track_id] = "bottom"  # Assume all entered vehicles came from bottom
+                    self.log(f"[PERSIST] Set default direction 'bottom' for {len(valid_track_ids)} vehicles from old state file")
+
+                # Restore vehicle_last_seen with timestamp from state file
+                # All vehicles in persisted state are from today, so use state's timestamp
+                if "timestamp" in state and valid_track_ids:
+                    try:
+                        state_timestamp = datetime.fromisoformat(state["timestamp"])
+                        for track_id in valid_track_ids:
+                            self.vehicle_last_seen[track_id] = state_timestamp
+                        self.log(f"[PERSIST] Set vehicle_last_seen for {len(valid_track_ids)} vehicles to {state_timestamp}")
+                    except Exception as ts_err:
+                        self.log(f"[PERSIST] ⚠ Could not parse state timestamp: {ts_err}")
+
                 # Restore notification sent status
                 global _vehicle_telegram_sent_with_plate, _vehicle_telegram_sent_without_plate, _vehicle_telegram_sent_lock
                 if "sent_with_plate" in state:
@@ -1566,56 +1592,64 @@ class PlateProcessor:
     def _save_state(self) -> None:
         """Save vehicle state to JSON file for persistence (one file per day)."""
         try:
-            self.log(f"[PERSIST] _save_state: Attempting to acquire lock...")
+            # self.log(f"[PERSIST] _save_state: Attempting to acquire lock...")
             with self._state_lock:
-                self.log(f"[PERSIST] _save_state: Lock acquired")
+                # self.log(f"[PERSIST] _save_state: Lock acquired")
                 state_file = self._get_state_file_path()
-                self.log(f"[PERSIST] _save_state: state_file={state_file}")
+                # self.log(f"[PERSIST] _save_state: state_file={state_file}")
                 
                 # Convert all data to JSON-serializable format
                 # No need to filter - data already contains only today's vehicles (reset at day start)
-                self.log(f"[PERSIST] _save_state: Converting vehicle_plates...")
+                # self.log(f"[PERSIST] _save_state: Converting vehicle_plates...")
                 today_plates = {
                     str(tid): plate
                     for tid, plate in self.vehicle_plates.items()
                 }
-                self.log(f"[PERSIST] _save_state: Converted plates: {len(today_plates)}")
+                # self.log(f"[PERSIST] _save_state: Converted plates: {len(today_plates)}")
                 
-                self.log(f"[PERSIST] _save_state: Converting vehicle_plate_counts...")
+                # self.log(f"[PERSIST] _save_state: Converting vehicle_plate_counts...")
                 today_plate_counts = {
                     str(tid): counts
                     for tid, counts in self.vehicle_plate_counts.items()
                 }
-                self.log(f"[PERSIST] _save_state: Converted plate_counts: {len(today_plate_counts)}")
+                # self.log(f"[PERSIST] _save_state: Converted plate_counts: {len(today_plate_counts)}")
+                
+                # self.log(f"[PERSIST] _save_state: Converting vehicle_directions...")
+                today_directions = {
+                    str(tid): direction
+                    for tid, direction in self.vehicle_directions.items()
+                }
+                # self.log(f"[PERSIST] _save_state: Converted directions: {len(today_directions)}")
                 
                 # Persist notification sent status
-                self.log(f"[PERSIST] _save_state: Processing telegram sent status...")
+                # self.log(f"[PERSIST] _save_state: Processing telegram sent status...")
                 global _vehicle_telegram_sent_with_plate, _vehicle_telegram_sent_without_plate
                 sent_with_plate_list = []
                 sent_without_plate_list = []
                 with _vehicle_telegram_sent_lock:
-                    self.log(f"[PERSIST] _save_state: Telegram lock acquired")
+                    # self.log(f"[PERSIST] _save_state: Telegram lock acquired")
                     for track_id in _vehicle_telegram_sent_with_plate:
                         sent_with_plate_list.append(str(track_id))
                     for track_id in _vehicle_telegram_sent_without_plate:
                         sent_without_plate_list.append(str(track_id))
-                    self.log(f"[PERSIST] _save_state: Telegram lock released")
+                    # self.log(f"[PERSIST] _save_state: Telegram lock released")
                 
-                self.log(f"[PERSIST] _save_state: Building state dict...")
+                # self.log(f"[PERSIST] _save_state: Building state dict...")
                 state = {
                     "vehicle_plates": today_plates,
                     "vehicle_plate_counts": today_plate_counts,
+                    "vehicle_directions": today_directions,
                     "sent_with_plate": sent_with_plate_list,
                     "sent_without_plate": sent_without_plate_list,
                     "timestamp": datetime.now().isoformat(),
                 }
-                self.log(f"[PERSIST] _save_state: State dict built, size={len(str(state))} chars")
+                # self.log(f"[PERSIST] _save_state: State dict built, size={len(str(state))} chars")
 
-                self.log(f"[PERSIST] _save_state: Writing to file {state_file}...")
+                # self.log(f"[PERSIST] _save_state: Writing to file {state_file}...")
                 with open(state_file, "w", encoding="utf-8") as f:
                     json.dump(state, f, indent=2, ensure_ascii=False)
-                self.log(f"[PERSIST] _save_state: ✓ File written successfully")
-            self.log(f"[PERSIST] _save_state: Lock released")
+                # self.log(f"[PERSIST] _save_state: ✓ File written successfully")
+            # self.log(f"[PERSIST] _save_state: Lock released")
         except Exception as e:
             self.log(f"[PERSIST] Failed to save state: {e}")
             import traceback

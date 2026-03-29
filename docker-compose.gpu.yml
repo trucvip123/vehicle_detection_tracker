@@ -1,0 +1,91 @@
+version: '3.8'
+
+services:
+  gpu-vehicle-detector:
+    # Build from local Dockerfile
+    build:
+      context: .
+      dockerfile: Dockerfile.gpu
+    
+    container_name: gpu-vehicle-detector
+    
+    # GPU support
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all  # Use all available GPUs
+              capabilities: [gpu]
+    
+    # Environment variables
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
+      - CUDA_VISIBLE_DEVICES=0
+    
+    # Volume mounts for data persistence
+    volumes:
+      # Mount local project directory
+      - .:/app
+      # Mount logs directory
+      - ./logs:/app/logs
+      # Mount video/output directory
+      - ./video:/app/video
+      # Mount model cache
+      - ./model:/app/model
+    
+    # Keep container running
+    stdin_open: true
+    tty: true
+    
+    # Network configuration
+    networks:
+      - detection-network
+    
+    # Resource limits
+    mem_limit: 4g
+    
+    # Restart policy
+    restart: unless-stopped
+
+  # Optional: Jupyter notebook for interactive development
+  jupyter-gpu:
+    build:
+      context: .
+      dockerfile: Dockerfile.gpu
+    
+    container_name: jupyter-gpu-detector
+    
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
+      - CUDA_VISIBLE_DEVICES=0
+    
+    volumes:
+      - .:/app
+      - ./logs:/app/logs
+      - ./video:/app/video
+      - ./model:/app/model
+    
+    ports:
+      - "8888:8888"  # Jupyter notebook port
+    
+    networks:
+      - detection-network
+    
+    command: jupyter notebook --ip=0.0.0.0 --allow-root --no-browser
+    
+    restart: unless-stopped
+
+networks:
+  detection-network:
+    driver: bridge
