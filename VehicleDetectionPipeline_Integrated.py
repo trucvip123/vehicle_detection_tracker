@@ -245,8 +245,8 @@ def main():
     logger.info("="*80)
     
     # Configuration
-    RTSP_URL = "rtsp://admin:MOVYKV@aicamera.serveminecraft.net:554/Streaming/Channels/101"
-    # RTSP_URL = "video/b.mp4"  # For testing with local video, comment out for RTSP
+    # RTSP_URL = "rtsp://admin:MOVYKV@aicamera.serveminecraft.net:554/Streaming/Channels/101"
+    RTSP_URL = "video/3103.mp4"  # For testing with local video, comment out for RTSP
 
     # Mode selection
     mode = 'gpu'  # Default: fast GPU pipeline

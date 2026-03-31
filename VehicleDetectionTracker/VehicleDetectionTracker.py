@@ -202,7 +202,13 @@ class VehicleDetectionTracker:
                 log_func=log
             )
             
-            total_with_plates = len(today_summary)
+            # Filter out UNKNOWN plates (None values)
+            today_summary_filtered = [
+                (plate_text, count) for plate_text, count in today_summary
+                if plate_text is not None
+            ]
+            
+            total_with_plates = len(today_summary_filtered)
             total_without_plates = total_all_entering - total_with_plates
             
             # Display comprehensive summary
@@ -216,11 +222,9 @@ class VehicleDetectionTracker:
             
             if total_with_plates > 0:
                 log("📋 PLATE BREAKDOWN:")
-                # Log each vehicle with its plate count
-                for plate_text, count in today_summary:
-                    # Handle None plate_text gracefully
-                    plate_display = str(plate_text) if plate_text else "UNKNOWN"
-                    log(f"   🚗 {plate_display:15s} : {count:2d} vehicle(s)")
+                # Log each vehicle with its plate count (excluding UNKNOWN)
+                for plate_text, count in today_summary_filtered:
+                    log(f"   🚗 {plate_text:15s} : {count:2d} vehicle(s)")
             
             log("="*80 + "\n")
                 

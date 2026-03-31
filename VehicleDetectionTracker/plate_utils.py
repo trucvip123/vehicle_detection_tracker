@@ -19,7 +19,7 @@ from VehicleDetectionTracker.function import utils_rotate, helper
 class InferenceQueue:
     """Queue-based inference system to prevent lock contention."""
     
-    def __init__(self, num_workers=2):
+    def __init__(self, num_workers=6):
         """Initialize inference queue with worker threads.
         
         Args:
@@ -150,7 +150,7 @@ class InferenceQueue:
 _inference_queue = None
 
 
-def initialize_inference_queue(num_workers=2):
+def initialize_inference_queue(num_workers=6):
     """Initialize the global inference queue."""
     global _inference_queue
     if _inference_queue is None:

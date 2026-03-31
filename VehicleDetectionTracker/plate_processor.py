@@ -5,10 +5,10 @@ import threading
 import cv2
 import json
 import os
-import time
-from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, wait, ALL_COMPLETED
 from typing import Dict, Set, Optional, Tuple, Callable, Any, List
+from difflib import SequenceMatcher
+
 from VehicleDetectionTracker.plate_utils import (
     detect_license_plate_sync,
     submit_plate_detection_async,
@@ -25,7 +25,6 @@ from VehicleDetectionTracker.vehicle_summary import (
     merge_similar_plates,
 )
 from VehicleDetectionTracker.metrics import get_metrics_collector
-from VehicleDetectionTracker.performance_timing import time_block
 
 
 # Global sets to track vehicle notifications
@@ -371,15 +370,24 @@ class PlateProcessor:
             self.log(f"[PLATE] vehicle_id={track_id} error finding image: {e}")
             return None
 
+    @staticmethod
+    def normalize_plate(plate: str) -> str:
+        return plate.replace("-", "").replace(".", "").upper()
+
+    @staticmethod
+    def similarity(a: str, b: str) -> float:
+        return SequenceMatcher(None, a, b).ratio()
+
     def get_most_detected_plate(self, track_id: int) -> Tuple[str, int]:
         """
         Get the license plate with highest detection count for a vehicle.
+        If tie → choose plate most similar to others (consensus).
 
         Args:
             track_id: Vehicle track ID
 
         Returns:
-            tuple: (plate_text, count) or (None, 0) if no plates detected
+            tuple: (plate_text, count) or (None, 0)
         """
         if (
             track_id not in self.vehicle_plate_counts_each_frame
@@ -388,9 +396,33 @@ class PlateProcessor:
             return None, 0
 
         plate_counts = self.vehicle_plate_counts_each_frame[track_id]
-        # Find plate with maximum count
-        most_detected_plate = max(reversed(plate_counts.items()), key=lambda x: x[1])  # In case of tie, get the most recently added plate
-        return most_detected_plate
+
+        # 🔹 Step 1: tìm max count
+        max_count = max(plate_counts.values())
+
+        # 🔹 Step 2: lấy các plate có cùng max_count
+        candidates = [p for p, c in plate_counts.items() if c == max_count]
+
+        # Nếu chỉ có 1 thì return luôn
+        if len(candidates) == 1:
+            return candidates[0], max_count
+
+        # 🔹 Step 3: tie-break bằng similarity
+        norm_map = {p: self.normalize_plate(p) for p in candidates}
+    
+        scores = {}
+        for p1 in candidates:
+            total_score = 0
+            for p2 in candidates:
+                if p1 == p2:
+                    continue
+                total_score += self.similarity(norm_map[p1], norm_map[p2])
+            scores[p1] = total_score
+
+        # 🔹 Step 4: chọn plate có similarity cao nhất
+        best_plate = max(scores, key=scores.get)
+
+        return best_plate
 
     def _sanitize_filename(self, filename: str) -> str:
         """
@@ -640,29 +672,10 @@ class PlateProcessor:
                         ocr_success=(plate_text is not None and plate_text != "unknown")
                     )
                     
-                    # NOTE: Do NOT use vehicle_plate_counts for intermediate decisions
-                    # vehicle_plate_counts is only for end-of-day summary
-                    # Use vehicle_plates for notifications and tracking
-                    
                     # Just accumulate the plate detection for summary purposes
                     plate_counts = self.vehicle_plate_counts_each_frame[effective_track_id]
                     log_plate(effective_track_id, f"Accumulated plate detection: plate={plate_text}, plate_counts={plate_counts}")
                     
-                    # # Set best plate in vehicle_plates if not already set
-                    # # First valid plate detected becomes the primary plate for this vehicle
-                    # if effective_track_id not in self.vehicle_plates or not self.vehicle_plates[effective_track_id]:
-                    #     self.vehicle_plates[effective_track_id] = plate_text
-                    #     self.log(f"[PLATE] vehicle_id={effective_track_id} Set primary plate: {plate_text}")
-                        
-                    #     # Also track in vehicle_plate_counts for summary (1 vehicle = 1 count)
-                    #     if effective_track_id not in self.vehicle_plate_counts:
-                    #         self.vehicle_plate_counts[effective_track_id] = {}
-                    #     if plate_text not in self.vehicle_plate_counts[effective_track_id]:
-                    #         self.vehicle_plate_counts[effective_track_id][plate_text] = 1
-                    #         self.log(f"[PLATE] vehicle_id={effective_track_id} Added to plate_counts: {plate_text}")
-                    
-                    # === TIME BLOCK: SAVE DETECTED IMAGE ===
-                    # with time_block(f"[SAVE_IMAGE] vehicle_id={effective_track_id}", self.log):
                     # Save vehicle frame for later use in final notification
                     # Store detected frame with plate info in filename
                     os.makedirs(vehicle_dir, exist_ok=True)
@@ -1363,25 +1376,29 @@ class PlateProcessor:
             
             plate_text = self.get_most_detected_plate(track_id)[0]  # Get the best plate detected for this vehicle
             
+            # Skip if no valid plate was detected (None means no detections)
+            is_valid_plate = plate_text and str(plate_text).strip().lower() != "unknown"
+            
             # Set best plate in vehicle_plates if not already set (thread-safe)
-            # First valid plate detected becomes the primary plate for this vehicle
+            # Only store if we have a valid plate (skip None and "unknown")
             with self._state_lock:
-                if track_id not in self.vehicle_plates or not self.vehicle_plates[track_id]:
-                    self.vehicle_plates[track_id] = plate_text
-                    self.log(f"[PLATE] vehicle_id={track_id} Set primary plate: {plate_text}")
-                    
-                    # Also track in vehicle_plate_counts for summary (1 vehicle = 1 count)
-                    if track_id not in self.vehicle_plate_counts:
-                        self.vehicle_plate_counts[track_id] = {}
-                    if plate_text not in self.vehicle_plate_counts[track_id]:
-                        self.vehicle_plate_counts[track_id][plate_text] = 1
-                        self.log(f"[PLATE] vehicle_id={track_id} Added to plate_counts: {plate_text}")
+                if is_valid_plate:
+                    if track_id not in self.vehicle_plates or not self.vehicle_plates[track_id]:
+                        self.vehicle_plates[track_id] = plate_text
+                        self.log(f"[PLATE] vehicle_id={track_id} Set primary plate: {plate_text}")
+                        
+                        # Also track in vehicle_plate_counts for summary (1 vehicle = 1 count)
+                        if track_id not in self.vehicle_plate_counts:
+                            self.vehicle_plate_counts[track_id] = {}
+                        if plate_text not in self.vehicle_plate_counts[track_id]:
+                            self.vehicle_plate_counts[track_id][plate_text] = 1
+                            self.log(f"[PLATE] vehicle_id={track_id} Added to plate_counts: {plate_text}")
             
             
             notification_sent = False
             
-            # Case 1: Plate detected
-            if plate_text and plate_text != "unknown":
+            # Case 1: Plate detected (only send if valid plate)
+            if is_valid_plate:
                 self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} Sending final notification WITH PLATE: plate={plate_text}")
                 
                 # Find best image matching the detected plate

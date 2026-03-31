@@ -193,16 +193,25 @@ def save_daily_vehicle_summary(
         # Merge similar plates (differ by 1-2 characters)
         plate_summary = merge_similar_plates(plate_summary, log_func)
         
+        # Filter out unknown/None plates from the summary
+        plate_summary_filtered = {
+            plate: count for plate, count in plate_summary.items()
+            if plate and str(plate).strip().lower() != "unknown"
+        }
+        
+        # Count vehicles with identified plates (for summary)
+        vehicles_with_plates = sum(plate_summary_filtered.values()) if plate_summary_filtered else 0
+        
         # Format date for readable display: YYYYMMDD -> YYYY-MM-DD
         formatted_date = f"{date_str[0:4]}-{date_str[4:6]}-{date_str[6:8]}"
         
-        # Build detailed message
-        msg = f"Tổng hợp xe vào ngày {formatted_date}: {len(vehicles_today)} xe vào khu vực mỏ\n"
+        # Build detailed message (only include vehicles with identified plates)
+        msg = f"Tổng hợp xe vào ngày {formatted_date}: {vehicles_with_plates} xe vào khu vực mỏ\n"
         msg += "━" * 30 + "\n"
         
         # Sort plates by count (highest first) then alphabetically
         sorted_plates = sorted(
-            plate_summary.items(), 
+            plate_summary_filtered.items(), 
             key=lambda x: (-x[1], x[0])
         )
         
