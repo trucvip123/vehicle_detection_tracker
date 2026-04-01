@@ -5,6 +5,7 @@ import threading
 import cv2
 import json
 import os
+import uuid
 from concurrent.futures import ThreadPoolExecutor, wait, ALL_COMPLETED
 from typing import Dict, Set, Optional, Tuple, Callable, Any, List
 from difflib import SequenceMatcher
@@ -27,14 +28,18 @@ from VehicleDetectionTracker.vehicle_summary import (
 from VehicleDetectionTracker.metrics import get_metrics_collector
 
 
-# Global sets to track vehicle notifications
-_vehicle_telegram_sent_with_plate = set()  # Vehicles that sent notification with plate
-_vehicle_telegram_sent_without_plate = set()  # Vehicles that sent notification without plate
+# Global sets to track vehicle notifications using UUIDs (not track_ids)
+_vehicle_telegram_sent_with_plate = set()  # Vehicle UUIDs that sent notification with plate
+_vehicle_telegram_sent_without_plate = set()  # Vehicle UUIDs that sent notification without plate
 _vehicle_telegram_sent_lock = threading.RLock()  # RLock to allow reentrant locking
+
+# UUID Mapping: Maps detector track_id (int) → system UUID (str)
+_track_id_to_uuid = {}  # {track_id: uuid_string}
+_uuid_mapping_lock = threading.RLock()  # Lock for UUID mapping updates
 
 
 def reset_telegram_sent() -> None:
-    """Reset the telegram sent tracking set."""
+    """Reset the telegram sent tracking sets."""
     global _vehicle_telegram_sent_with_plate, _vehicle_telegram_sent_without_plate
     _vehicle_telegram_sent_with_plate.clear()
     _vehicle_telegram_sent_without_plate.clear()
@@ -42,7 +47,11 @@ def reset_telegram_sent() -> None:
 
 def reset_daily_tracking() -> None:
     """Reset daily tracking data (to be called at midnight or start of new day)."""
+    global _track_id_to_uuid, _uuid_mapping_lock
     reset_telegram_sent()
+    # Reset UUID mapping only at new day (not on system restart)
+    with _uuid_mapping_lock:
+        _track_id_to_uuid.clear()
 
 
 class PlateProcessor:
@@ -127,8 +136,36 @@ class PlateProcessor:
         else:
             self.log("[PLATE_PROCESSOR] Batch accumulator disabled (using traditional per-vehicle processing)")
         
+        # Initialize UUID tracking for restart resilience
+        self._track_id_to_uuid_local = {}  # Temporary instance reference to global UUID mapping
+        
         # Load persisted state if it exists
         self._load_state()
+
+    # ===== UUID MAPPING METHODS (Restart Resilience) =====
+    def get_or_create_uuid(self, track_id: int) -> str:
+        """
+        Get or create a UUID for a given track_id.
+        This ensures each vehicle (even after detector restart) gets a unique UUID.
+        
+        Args:
+            track_id: Detector's track ID (int)
+            
+        Returns:
+            str: UUID string (unique per vehicle, persistent across restarts)
+        """
+        global _track_id_to_uuid, _uuid_mapping_lock
+        
+        with _uuid_mapping_lock:
+            if track_id not in _track_id_to_uuid:
+                # New vehicle detected - assign a UUID
+                vehicle_uuid = str(uuid.uuid4())
+                _track_id_to_uuid[track_id] = vehicle_uuid
+                self.log(f"[UUID] New vehicle: track_id={track_id} → UUID={vehicle_uuid[:8]}")
+                return vehicle_uuid
+            else:
+                # Vehicle already has a UUID
+                return _track_id_to_uuid[track_id]
 
     # ===== THREAD-SAFE STATE ACCESS METHODS =====
     def update_vehicle_state(
@@ -422,7 +459,7 @@ class PlateProcessor:
         # 🔹 Step 4: chọn plate có similarity cao nhất
         best_plate = max(scores, key=scores.get)
 
-        return best_plate
+        return best_plate, max_count
 
     def _sanitize_filename(self, filename: str) -> str:
         """
@@ -463,22 +500,25 @@ class PlateProcessor:
             timestamp_str: Formatted timestamp string for logging/files
             vehicle_dir: Vehicle directory for saving files
         """
-        # Check if this vehicle_id has already sent notification with plate
+        # Get or create UUID for this track_id (ensures uniqueness across restarts)
+        vehicle_uuid = self.get_or_create_uuid(track_id)
+        
+        # Check if this vehicle (by UUID) has already sent notification
         # If so, skip processing to avoid duplicate notifications
         global _vehicle_telegram_sent_with_plate, _vehicle_telegram_sent_without_plate, _vehicle_telegram_sent_lock
         
         with _vehicle_telegram_sent_lock:
-            if track_id in _vehicle_telegram_sent_with_plate:
-                self.log(f"[PLATE] vehicle_id={track_id} Already sent notification with plate, skipping background processing")
+            if vehicle_uuid in _vehicle_telegram_sent_with_plate:
+                self.log(f"[PLATE] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) Already sent notification with plate, skipping background processing")
                 return
         
-        self.log(f"[PLATE] vehicle_id={track_id} Processing plate background")
+        self.log(f"[PLATE] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) Processing plate background")
         try:
-            self.log(f"[PLATE] vehicle_id={track_id} ► Starting background plate detection")
+            self.log(f"[PLATE] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ► Starting background plate detection")
             # EARLY CHECK: Skip if vehicle already notified (to avoid stale background tasks)
             with _vehicle_telegram_sent_lock:
-                if track_id in _vehicle_telegram_sent_with_plate or track_id in _vehicle_telegram_sent_without_plate:
-                    self.log(f"[PLATE] vehicle_id={track_id} Vehicle already has notification sent, skipping background processing (stale task)")
+                if vehicle_uuid in _vehicle_telegram_sent_with_plate or vehicle_uuid in _vehicle_telegram_sent_without_plate:
+                    self.log(f"[PLATE] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) Vehicle already has notification sent, skipping background processing (stale task)")
                     return
             
             # === TIME BLOCK: STATE UPDATE ===
@@ -499,7 +539,7 @@ class PlateProcessor:
             # with time_block(f"[SUBMIT_PLATE] vehicle_id={track_id}", self.log):
             # Submit plate detection to inference queue asynchronously
             # This avoids model_lock bottleneck by queuing tasks
-            self.log(f"[PLATE] vehicle_id={track_id} Submitting plate detection to inference queue...")
+            self.log(f"[PLATE] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) Submitting plate detection to inference queue...")
             
             # Increment pending queue task count BEFORE submitting
             with self._task_count_lock:
@@ -1286,10 +1326,21 @@ class PlateProcessor:
         # Second pass: send notifications for any remaining vehicles (not yet notified)
         not_notified_count = 0
         for track_id in all_vehicle_ids:
-            # Check if already sent
+            # Get UUID for this vehicle (don't create new one, just check if it exists)
+            vehicle_uuid = None
+            global _track_id_to_uuid, _uuid_mapping_lock
+            with _uuid_mapping_lock:
+                vehicle_uuid = _track_id_to_uuid.get(track_id)
+            
+            # Check if already sent (by UUID)
             with _vehicle_telegram_sent_lock:
-                already_sent = (track_id in _vehicle_telegram_sent_with_plate or 
-                              track_id in _vehicle_telegram_sent_without_plate)
+                if vehicle_uuid:
+                    already_sent = (vehicle_uuid in _vehicle_telegram_sent_with_plate or 
+                                  vehicle_uuid in _vehicle_telegram_sent_without_plate)
+                else:
+                    # UUID not created yet means vehicle never went through plate processing
+                    # So it definitely hasn't sent a notification yet
+                    already_sent = False
             
             if not already_sent:
                 not_notified_count += 1
@@ -1307,12 +1358,13 @@ class PlateProcessor:
                 else:
                     status = f"({remaining_tasks} tasks still pending, plate data incomplete)"
                 
-                self.log(f"[CLEANUP_NOTIFY] vehicle_id={track_id} Sending cleanup notification {status}")
+                uuid_str = vehicle_uuid[:8] if vehicle_uuid else "new"
+                self.log(f"[CLEANUP_NOTIFY] vehicle_id={track_id} (uuid={uuid_str}) Sending cleanup notification {status}")
                 
                 # Sync vehicle_plates from vehicle_plates (already should be set if tasks completed)
                 # Only use vehicle_plates for notification - vehicle_plate_counts is only for end-of-day summary
                 if track_id not in self.vehicle_plates or not self.vehicle_plates[track_id]:
-                    self.log(f"[CLEANUP_NOTIFY] vehicle_id={track_id} Warning: vehicle_plates not set, no plate to send in notification")
+                    self.log(f"[CLEANUP_NOTIFY] vehicle_id={track_id} (uuid={uuid_str}) Warning: vehicle_plates not set, no plate to send in notification")
                 
                 # Find vehicle_dir from vehicle_last_seen (thread-safe)
                 vehicle_dir = None
@@ -1328,11 +1380,12 @@ class PlateProcessor:
                 
                 result = self.send_final_vehicle_notification(track_id, vehicle_dir=vehicle_dir)
                 if result:
-                    self.log(f"[CLEANUP_NOTIFY] vehicle_id={track_id} ✓ Cleanup notification sent")
+                    self.log(f"[CLEANUP_NOTIFY] vehicle_id={track_id} (uuid={uuid_str}) ✓ Cleanup notification sent")
                 else:
-                    self.log(f"[CLEANUP_NOTIFY] vehicle_id={track_id} ⚠ Cleanup notification skipped")
+                    self.log(f"[CLEANUP_NOTIFY] vehicle_id={track_id} (uuid={uuid_str}) ⚠ Cleanup notification skipped")
             else:
-                self.log(f"[CLEANUP_NOTIFY] vehicle_id={track_id} Already notified, skipping")
+                uuid_str = vehicle_uuid[:8] if vehicle_uuid else "unknown"
+                self.log(f"[CLEANUP_NOTIFY] vehicle_id={track_id} (uuid={uuid_str}) Already notified, skipping")
         
         if not_notified_count == 0:
             self.log(f"[CLEANUP_NOTIFY] ✓ No remaining vehicles to notify (all already sent via callbacks)")
@@ -1356,10 +1409,13 @@ class PlateProcessor:
         """
         global _vehicle_telegram_sent_with_plate, _vehicle_telegram_sent_without_plate, _vehicle_telegram_sent_lock
         
-        # Skip if already sent
+        # Get or create UUID for this vehicle (uniqueness across restarts)
+        vehicle_uuid = self.get_or_create_uuid(track_id)
+        
+        # Skip if already sent (check by UUID, not track_id)
         with _vehicle_telegram_sent_lock:
-            if track_id in _vehicle_telegram_sent_with_plate or track_id in _vehicle_telegram_sent_without_plate:
-                self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} Already sent notification, skipping final notification")
+            if vehicle_uuid in _vehicle_telegram_sent_with_plate or vehicle_uuid in _vehicle_telegram_sent_without_plate:
+                self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) Already sent notification, skipping final notification")
                 return False
         
         try:
@@ -1371,7 +1427,7 @@ class PlateProcessor:
             # Check if direction is entering (must contain "bottom")
             is_entering = direction_label and "bottom" in direction_label.lower()
             if not is_entering:
-                self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} Skipping final notification - vehicle is exiting or direction unknown (direction={direction_label})")
+                self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) Skipping final notification - vehicle is exiting or direction unknown (direction={direction_label})")
                 return False
             
             plate_text = self.get_most_detected_plate(track_id)[0]  # Get the best plate detected for this vehicle
@@ -1399,7 +1455,7 @@ class PlateProcessor:
             
             # Case 1: Plate detected (only send if valid plate)
             if is_valid_plate:
-                self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} Sending final notification WITH PLATE: plate={plate_text}")
+                self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) Sending final notification WITH PLATE: plate={plate_text}")
                 
                 # Find best image matching the detected plate
                 image_path = None
@@ -1409,25 +1465,25 @@ class PlateProcessor:
                     stored_path = self.vehicle_detected_plate_images[track_id]
                     if os.path.exists(stored_path) and os.path.getsize(stored_path) > 0:
                         image_path = stored_path
-                        self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} Using stored image: {stored_path}")
+                        self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) Using stored image: {stored_path}")
                     else:
-                        self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} ⚠ Stored image not found or empty: {stored_path}")
+                        self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ⚠ Stored image not found or empty: {stored_path}")
                 
                 # If stored image not available, search vehicle_dir
                 if not image_path and vehicle_dir:
                     image_path = self._get_best_vehicle_image_by_plate(vehicle_dir, plate_text, track_id)
                     if not image_path:
-                        self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} ⚠ No image found in {vehicle_dir}")
+                        self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ⚠ No image found in {vehicle_dir}")
                     else:
-                        self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} ✓ Found image in directory: {image_path}")
+                        self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ✓ Found image in directory: {image_path}")
                 else:
                     if image_path:
-                        self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} ✓ Using stored image path")
+                        self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ✓ Using stored image path")
                     else:
-                        self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} ⚠ No vehicle_dir provided")
+                        self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ⚠ No vehicle_dir provided")
                 
                 # Send final notification with best plate (OUTSIDE of lock)
-                self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} ► Calling Telegram API with image_path={image_path}...")
+                self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ► Calling Telegram API with image_path={image_path}...")
                 try:
                     # === TIME BLOCK: TELEGRAM SEND ===
                     # with time_block(f"[TELEGRAM_SEND] vehicle_id={track_id}", self.log):
@@ -1437,24 +1493,24 @@ class PlateProcessor:
                         frame_timestamp,
                         image_path=image_path,
                     )
-                    self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} ✓ Telegram API call completed (success={telegram_response.get('ok', False)})")
+                    self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ✓ Telegram API call completed (success={telegram_response.get('ok', False)})")
                 except Exception as e:
-                    self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} ✗ Telegram API error: {e}")
+                    self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ✗ Telegram API error: {e}")
                     telegram_response = {"ok": False, "error": str(e)}
                 
                 # Only mark as sent if Telegram API succeeded (check 'ok' field)
                 telegram_success = telegram_response.get("ok", False)
                 if telegram_success:
-                    # Now update tracking status inside lock
+                    # Now update tracking status inside lock (store UUID, not track_id)
                     with _vehicle_telegram_sent_lock:
-                        _vehicle_telegram_sent_with_plate.add(track_id)
+                        _vehicle_telegram_sent_with_plate.add(vehicle_uuid)
                     
-                    self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} ✓ Final notification sent with plate={plate_text}")
+                    self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ✓ Final notification sent with plate={plate_text}")
                     # Record successful notification in metrics
                     self.metrics.record_notification_sent(success=True, api_call=True)
                     notification_sent = True
                 else:
-                    self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} ⚠ Telegram API failed, will retry later")
+                    self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ⚠ Telegram API failed, will retry later")
                     # Record failed notification in metrics
                     self.metrics.record_notification_sent(success=False, api_call=True)
                     notification_sent = False
@@ -1462,9 +1518,9 @@ class PlateProcessor:
             if notification_sent:
                 # === TIME BLOCK: SAVE STATE ===
                 # with time_block(f"[SAVE_STATE] vehicle_id={track_id}", self.log):
-                self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} Saving state (Telegram API was successful)...")
+                self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) Saving state (Telegram API was successful)...")
                 self._save_state()
-                self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} ✓ State saved")
+                self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ✓ State saved")
                 return True
             else:
                 # Record failed notification attempt if no plate was sent
@@ -1548,23 +1604,40 @@ class PlateProcessor:
                     except Exception as ts_err:
                         self.log(f"[PERSIST] ⚠ Could not parse state timestamp: {ts_err}")
 
-                # Restore notification sent status
-                global _vehicle_telegram_sent_with_plate, _vehicle_telegram_sent_without_plate, _vehicle_telegram_sent_lock
-                if "sent_with_plate" in state:
-                    for track_id_str in state["sent_with_plate"]:
-                        track_id = int(track_id_str)
-                        if track_id in valid_track_ids:
-                            with _vehicle_telegram_sent_lock:
-                                _vehicle_telegram_sent_with_plate.add(track_id)
-                                self.log(f"[PERSIST] Restored: vehicle_id={track_id} already sent with plate")
+                # Restore notification sent status (now using UUIDs instead of track_ids)
+                global _vehicle_telegram_sent_with_plate, _vehicle_telegram_sent_without_plate, _vehicle_telegram_sent_lock, _track_id_to_uuid, _uuid_mapping_lock
                 
-                if "sent_without_plate" in state:
-                    for track_id_str in state["sent_without_plate"]:
-                        track_id = int(track_id_str)
-                        if track_id in valid_track_ids:
-                            with _vehicle_telegram_sent_lock:
-                                _vehicle_telegram_sent_without_plate.add(track_id)
-                                self.log(f"[PERSIST] Restored: vehicle_id={track_id} already sent without plate")
+                # IMPORTANT: Never restore notification status on restart!
+                # Why: If system restarts, user likely wants fresh notifications, not old state
+                # Only UUID mapping persists to maintain consistency across restarts
+                
+                # First restore UUID mapping from state (if available)
+                if "track_id_to_uuid" in state:
+                    with _uuid_mapping_lock:
+                        for track_id_str, uuid_str in state["track_id_to_uuid"].items():
+                            track_id = int(track_id_str)
+                            _track_id_to_uuid[track_id] = uuid_str
+                    self.log(f"[PERSIST] Restored UUID mapping for {len(state['track_id_to_uuid'])} vehicles (for consistency)")
+                    self.log(f"[PERSIST] ℹ Notification status NOT restored - fresh restart, vehicles can send alerts")
+                    
+                    # Note: We explicitly do NOT restore sent_with_plate or sent_without_plate
+                    # This allows new notifications on system restart (desired behavior)
+                    # UUID mapping alone ensures consistency without blocking new detections
+                else:
+                    # BACKWARD COMPATIBILITY: Old state file without UUID mapping
+                    # Generate UUID for each vehicle loaded from state
+                    self.log(f"[PERSIST] ⚠ Old state file format (no UUID mapping). Generating UUIDs for {len(valid_track_ids)} vehicles...")
+                    with _uuid_mapping_lock:
+                        for track_id in valid_track_ids:
+                            if track_id not in _track_id_to_uuid:
+                                vehicle_uuid = str(uuid.uuid4())
+                                _track_id_to_uuid[track_id] = vehicle_uuid
+                                self.log(f"[PERSIST] Generated UUID for track_id={track_id}: {vehicle_uuid[:8]}")
+                    
+                    # IMPORTANT: Skip restoring old notification status (track_id based)
+                    # Reason: track_ids can be reused after restart, so old notifications shouldn't block new detections
+                    # Instead, use the freshly generated UUIDs which won't conflict
+                    self.log(f"[PERSIST] ✓ Skipped old notification status (using new UUIDs instead)")
 
                 self.log(
                     f"[PERSIST] ✓ Loaded state: {len(valid_track_ids)} vehicles from {state_file}"
@@ -1638,17 +1711,27 @@ class PlateProcessor:
                 }
                 # self.log(f"[PERSIST] _save_state: Converted directions: {len(today_directions)}")
                 
-                # Persist notification sent status
+                # Persist UUID mapping (for restart resilience)
+                global _track_id_to_uuid, _uuid_mapping_lock
+                uuid_mapping = {}
+                with _uuid_mapping_lock:
+                    uuid_mapping = {
+                        str(tid): uuid_str
+                        for tid, uuid_str in _track_id_to_uuid.items()
+                    }
+                
+                # Persist notification sent status (now by UUID, not track_id)
                 # self.log(f"[PERSIST] _save_state: Processing telegram sent status...")
                 global _vehicle_telegram_sent_with_plate, _vehicle_telegram_sent_without_plate
                 sent_with_plate_list = []
                 sent_without_plate_list = []
                 with _vehicle_telegram_sent_lock:
                     # self.log(f"[PERSIST] _save_state: Telegram lock acquired")
-                    for track_id in _vehicle_telegram_sent_with_plate:
-                        sent_with_plate_list.append(str(track_id))
-                    for track_id in _vehicle_telegram_sent_without_plate:
-                        sent_without_plate_list.append(str(track_id))
+                    # Now storing UUIDs directly
+                    for uuid_str in _vehicle_telegram_sent_with_plate:
+                        sent_with_plate_list.append(uuid_str)
+                    for uuid_str in _vehicle_telegram_sent_without_plate:
+                        sent_without_plate_list.append(uuid_str)
                     # self.log(f"[PERSIST] _save_state: Telegram lock released")
                 
                 # self.log(f"[PERSIST] _save_state: Building state dict...")
@@ -1656,6 +1739,7 @@ class PlateProcessor:
                     "vehicle_plates": today_plates,
                     "vehicle_plate_counts": today_plate_counts,
                     "vehicle_directions": today_directions,
+                    "track_id_to_uuid": uuid_mapping,  # NEW: Persist UUID mapping
                     "sent_with_plate": sent_with_plate_list,
                     "sent_without_plate": sent_without_plate_list,
                     "timestamp": datetime.now().isoformat(),
