@@ -39,9 +39,59 @@ def levenshtein_distance(s1: Optional[str], s2: Optional[str]) -> Union[int, flo
     return previous_row[-1]
 
 
+def normalize_plate_parts(plate: str) -> Optional[Dict[str, str]]:
+    """
+    Parse Vietnamese license plate into components.
+    
+    Expected format: XX-YYY.ZZ or XXX-YYY.ZZ or XXXX-YYY.ZZ
+    where:
+    - XX/XXX/XXXX: province code (mixed alphanumeric)
+    - YYY: serial number (3 digits)
+    - ZZ: check digits (2 digits)
+    
+    Returns:
+        Dict with 'province', 'serial', 'check' keys, or None if invalid format
+    """
+    if not plate or not isinstance(plate, str):
+        return None
+    
+    plate = plate.strip()
+    try:
+        # Split by '-' to separate province from the rest
+        parts = plate.split('-')
+        if len(parts) != 2:
+            return None
+        
+        province = parts[0].strip()
+        rest = parts[1].strip()  # e.g., "151.58"
+        
+        # Split rest by '.' to get serial and check digits
+        rest_parts = rest.split('.')
+        if len(rest_parts) != 2:
+            return None
+        
+        serial = rest_parts[0].strip()
+        check = rest_parts[1].strip()
+        
+        # Validate: serial/check should be digits
+        if not serial.isdigit() or not check.isdigit():
+            return None
+        
+        return {
+            'province': province,
+            'serial': serial,
+            'check': check
+        }
+    except Exception:
+        return None
+
+
 def merge_similar_plates(plate_summary: Dict[str, int], log_func: Optional[Callable[[str], None]] = None) -> Dict[str, int]:
     THRESHOLD = 2  # Merge plates that differ by up to 2 characters
     plates = list(plate_summary.keys())
+    
+    if not plates:
+        return {}
 
     # union-find
     parent = {p: p for p in plates}
@@ -55,19 +105,37 @@ def merge_similar_plates(plate_summary: Dict[str, int], log_func: Optional[Calla
     def union(a, b):
         parent[find(b)] = find(a)
 
-    # nối các biển giống nhau
+    # Merge logic: different rules for different cases
     for i in range(len(plates)):
         for j in range(i + 1, len(plates)):
-            if levenshtein_distance(plates[i], plates[j]) <= THRESHOLD:
-                union(plates[i], plates[j])
+            plate1 = plates[i]
+            plate2 = plates[j]
+            
+            # Rule 1: Check if only province code differs (serial+check match)
+            parts1 = normalize_plate_parts(plate1)
+            parts2 = normalize_plate_parts(plate2)
+            
+            if parts1 and parts2:
+                # If serial + check are the same but province differs → merge
+                if (parts1['serial'] == parts2['serial'] and 
+                    parts1['check'] == parts2['check'] and
+                    parts1['province'] != parts2['province']):
+                    if log_func:
+                        log_func(f"[MERGE] Province diff only: {plate1} + {plate2}")
+                    union(plate1, plate2)
+                    continue
+            
+            # Rule 2: Traditional Levenshtein distance check
+            if levenshtein_distance(plate1, plate2) <= THRESHOLD:
+                union(plate1, plate2)
 
-    # gom nhóm
+    # Group merged plates
     groups = {}
     for p in plates:
         root = find(p)
         groups.setdefault(root, []).append(p)
 
-    # build result
+    # Build result: use plate with highest count as representative
     result = {}
     for group in groups.values():
         represent = max(group, key=lambda p: plate_summary[p])

@@ -419,6 +419,9 @@ class PlateProcessor:
         """
         Get the license plate with highest detection count for a vehicle.
         If tie → choose plate most similar to others (consensus).
+        
+        Special handling for 2 candidates:
+        If one candidate matches the confirmed plate in vehicle_plates, select that one.
 
         Args:
             track_id: Vehicle track ID
@@ -444,6 +447,14 @@ class PlateProcessor:
         if len(candidates) == 1:
             return candidates[0], max_count
 
+        # 🔹 Step 2.5: Xử lý đặc biệt cho 2 candidates
+        # Nếu 1 trong 2 biển số đã được xác nhận trong vehicle_plates, chọn nó
+        if len(candidates) == 2:
+            current_confirmed_plate = self.vehicle_plates.get(track_id)
+            if current_confirmed_plate and current_confirmed_plate in candidates:
+                self.log(f"[PLATE_SELECT] vehicle_id={track_id} ✓ Tie-break (2 candidates): Found confirmed plate in candidates: {current_confirmed_plate} (count={max_count})")
+                return current_confirmed_plate, max_count
+        
         # 🔹 Step 3: tie-break bằng similarity
         norm_map = {p: self.normalize_plate(p) for p in candidates}
     
