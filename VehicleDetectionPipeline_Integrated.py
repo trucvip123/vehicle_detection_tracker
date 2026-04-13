@@ -84,11 +84,7 @@ class IntegratedVehicleDetectionPipeline:
             self.tracker = VehicleDetectionTracker()
             self.pipeline = None
             logger.info("[INIT] OK VehicleDetectionTracker loaded - Ready for full pipeline")
-            
-        else:
-            logger.error("[ERROR] Invalid mode or VehicleDetectionTracker not available")
-            raise ValueError(f"Invalid mode: {mode}")
-        
+      
         self.stats = {
             'frames_processed': 0,
             'vehicles_detected': 0,
@@ -245,8 +241,8 @@ def main():
     logger.info("="*80)
     
     # Configuration
-    # RTSP_URL = "rtsp://admin:MOVYKV@aicamera.serveminecraft.net:554/Streaming/Channels/101"
-    RTSP_URL = "video/0204.mp4"  # For testing with local video, comment out for RTSP
+    RTSP_URL = "rtsp://admin:MOVYKV@aicamera.serveminecraft.net:554/Streaming/Channels/101"
+    # RTSP_URL = "video/13042.mp4"  # For testing with local video, comment out for RTSP
 
     # Mode selection
     mode = 'gpu'  # Default: fast GPU pipeline

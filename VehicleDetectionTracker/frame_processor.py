@@ -120,7 +120,7 @@ class FrameProcessor:
         results = self.model.track(
             frame,
             persist=True,
-            tracker=tracking_config.get("tracker_type", "bytetrack.yaml"),
+            tracker=tracking_config.get("tracker_type"),
             classes=self.vehicle_classes,
             verbose=False,
             conf=self.detection_config.get("confidence"),

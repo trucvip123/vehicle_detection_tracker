@@ -109,8 +109,7 @@ class PlateProcessor:
         os.makedirs(self.state_dir, exist_ok=True)
 
         # Initialize inference queue for async plate detection (reduces model_lock contention)
-        initialize_inference_queue(num_workers=6)
-        self.log("[PLATE_PROCESSOR] ✓ Initialized inference queue with 2 worker threads")
+        initialize_inference_queue(num_workers=7)
 
         # Initialize batch accumulator for async batch OCR (Approach 2)
         from VehicleDetectionTracker.config_loader import get_batch_inference_config
