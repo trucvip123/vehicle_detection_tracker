@@ -289,6 +289,23 @@ class PaddleOCRWrapper:
         text = re.sub(r"[^A-Z0-9\.-]", "", text)  # chỉ giữ ký tự hợp lệ
         # print(f"DEBUG: text after sub: {text}")
         return text
+    
+    def priority(self, t):
+        digits = re.sub(r"\D", "", t)
+        length = len(digits)
+        
+        if length == 5:
+            # biển dài → ưu tiên có dấu .
+            if re.match(r"^\d{3}\.\d{2}$", t):
+                return 2
+            return 1
+        
+        elif length == 4:
+            # biển ngắn → không cần dấu .
+            return 1
+        
+        return 0  # rác
+
 
     def merge_ocr_results(self, ocr_results):
         # # print(f"DEBUG: ocr_results: {ocr_results}")
@@ -315,12 +332,12 @@ class PaddleOCRWrapper:
             province_part = ""
         _log_ocr(f"province_part: {province_part}", "ocr")
 
-    
+        sorted_data = sorted(normalized, key=self.priority, reverse=True)
 
         # number_candidates chỉ chứa chuỗi số (không còn chữ), lấy từ normalized, mỗi phần tử là chuỗi số có độ dài 4–5 ký tự.
         number_candidates = [
             re.sub(r"\D", "", t)
-            for t in normalized
+            for t in sorted_data
             if re.match(r"^\d{4,5}$", re.sub(r"\D", "", t))
         ]
         number_part = max(number_candidates, key=len, default="")
