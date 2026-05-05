@@ -79,7 +79,7 @@ class CPUProcessingPipeline:
 
 def main():
     """Test RTSP pipeline"""
-    RTSP_URL = "rtsp://admin:MOVYKV@aicamera.serveminecraft.net:554/Streaming/Channels/101"
+    RTSP_URL = "rtsp://admin:MOVYKV@aicamera.servemp3.com:554/Streaming/Channels/101"
     
     print("\n🎬 RTSP Pipeline Test (CPU Processing)")
     print("="*70)

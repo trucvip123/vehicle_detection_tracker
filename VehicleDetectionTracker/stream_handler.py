@@ -244,7 +244,9 @@ class StreamHandler:
                         frame, timestamp, plate_processor
                     )
                 except Exception as e:
-                    self.log(f"Lỗi xử lý frame: {e}")
+                    import traceback
+                    error_trace = traceback.format_exc()
+                    self.log(f"Lỗi xử lý frame: {type(e).__name__}: {e}\n{error_trace}")
                     continue
 
                 # if display_window:

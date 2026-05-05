@@ -41,6 +41,9 @@ class FrameProcessor:
         # Track previous state for debug logging (only log when changed)
         self._prev_active_vehicle_ids = set()  # Track previous active vehicles to only log when changed
         
+        # Flag to skip persistence on first frame after reset
+        self._force_fresh_tracker_next_frame = False
+        
         # Load config for detection and tracking
         self.detection_config = get_detection_config()
         self.vehicle_classes = self.detection_config.get(
@@ -95,6 +98,37 @@ class FrameProcessor:
             "inference_resolution": self.gpu_optimizer.inference_resolution,
         }
 
+    def reset_tracker(self) -> None:
+        """
+        Reset the ByteTrack tracker state to start fresh with vehicle IDs.
+        Called at the start of each day to reset vehicle ID counter (ID=1, 2, 3, ...).
+        
+        This ensures:
+        - Vehicle IDs restart from 1 each day
+        - No ID carryover from previous day
+        - Fresh tracking state for new day
+        
+        Strategy: Set a flag to skip persistence on the next frame,
+        which forces the tracker to reinitialize cleanly.
+        """
+        try:
+            # Set flag to force fresh tracker on next frame processing
+            self._force_fresh_tracker_next_frame = True
+            
+            # Clear local track history (safe - doesn't affect model state)
+            self.track_history.clear()
+            self.detected_vehicles.clear()
+            self.vehicle_timestamps.clear()
+            self._prev_active_vehicle_ids.clear()
+            
+            self.log("[TRACKER_RESET] ✓ Vehicle ID reset prepared - next frame will reinitialize tracker")
+            
+        except Exception as e:
+            import traceback
+            error_trace = traceback.format_exc()
+            self.log(f"[TRACKER_RESET] ⚠ Warning during tracker reset: {type(e).__name__}: {e}\n{error_trace}")
+            # Non-critical error - system will continue with tracking
+
     def process_frame_streaming(self, frame: np.ndarray, frame_timestamp: datetime, plate_processor: Any) -> np.ndarray:
         """
         Optimized frame processing for streaming: Fast detection, background OCR.
@@ -117,9 +151,17 @@ class FrameProcessor:
         # === VEHICLE DETECTION TIMING ===
         # with time_block("[VEHICLE_DETECT]", self.log):
         tracking_config = get_tracking_config()
+        
+        # Use fresh tracker on first frame after daily reset
+        use_persist = True
+        if self._force_fresh_tracker_next_frame:
+            use_persist = False
+            self._force_fresh_tracker_next_frame = False
+            self.log("[TRACK] First frame after reset - using fresh tracker (persist=False)")
+        
         results = self.model.track(
             frame,
-            persist=True,
+            persist=use_persist,
             tracker=tracking_config.get("tracker_type"),
             classes=self.vehicle_classes,
             verbose=False,
@@ -437,53 +479,3 @@ class FrameProcessor:
             "total_frames": total_frames,
             "rejection_rate": rejection_rate,
         }
-
-    def set_quality_thresholds(
-        self,
-        quality_threshold: Optional[float] = None,
-        brightness_min: Optional[float] = None,
-        brightness_max: Optional[float] = None,
-        blur_variance_min: Optional[float] = None,
-        contrast_min: Optional[float] = None,
-        entropy_min: Optional[float] = None,
-    ) -> None:
-        """
-        Set custom frame quality validation thresholds.
-
-        Args:
-            quality_threshold (float): Minimum quality score (0-100)
-            brightness_min (float): Minimum brightness (0-255)
-            brightness_max (float): Maximum brightness (0-255)
-            blur_variance_min (float): Minimum Laplacian variance for sharpness
-            contrast_min (float): Minimum contrast (std dev)
-            entropy_min (float): Minimum histogram entropy
-        """
-        if quality_threshold is not None:
-            self.quality_threshold = quality_threshold
-        if brightness_min is not None:
-            self.brightness_min = brightness_min
-        if brightness_max is not None:
-            self.brightness_max = brightness_max
-        if blur_variance_min is not None:
-            self.blur_variance_min = blur_variance_min
-        if contrast_min is not None:
-            self.contrast_min = contrast_min
-        if entropy_min is not None:
-            self.entropy_min = entropy_min
-
-        self.log(
-            f"[QUALITY] Thresholds updated: quality={self.quality_threshold}, "
-            f"brightness=[{self.brightness_min}, {self.brightness_max}], "
-            f"blur_var={self.blur_variance_min}, contrast={self.contrast_min}, "
-            f"entropy={self.entropy_min}"
-        )
-
-    def get_metrics(self) -> 'MetricsCollector':
-        """
-        Get metrics collector instance for accessing metrics.
-
-        Returns:
-            MetricsCollector: Current metrics collector instance
-        """
-        return self.metrics
-

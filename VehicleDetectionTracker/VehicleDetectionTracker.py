@@ -131,6 +131,10 @@ class VehicleDetectionTracker:
             self.plate_model, self.ocr_reader, self._executor, log
         )
         self.frame_processor = FrameProcessor(self.model, log, gpu_optimizer=self.gpu_optimizer)
+        
+        # Link frame_processor to plate_processor for tracker reset on daily reset
+        self.plate_processor.frame_processor = self.frame_processor
+        
         self.stream_handler = StreamHandler(log, self.plate_processor)
 
         # Initialize metrics collector

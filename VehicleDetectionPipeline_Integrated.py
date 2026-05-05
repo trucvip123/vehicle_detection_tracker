@@ -240,9 +240,9 @@ def main():
     logger.info("INTEGRATED VEHICLE DETECTION PIPELINE - PRODUCTION")
     logger.info("="*80)
     
-    # Configuration
-    RTSP_URL = "rtsp://admin:MOVYKV@aicamera.serveminecraft.net:554/Streaming/Channels/101"
-    # RTSP_URL = "video/1504.mp4"  # For testing with local video, comment out for RTSP
+    # Configuration  
+    RTSP_URL = "rtsp://admin:MOVYKV@aicamera.servemp3.com:554/Streaming/Channels/101"
+    # RTSP_URL = "video/2704.mp4"  # For testing with local video, comment out for RTSP
 
     # Mode selection
     mode = 'gpu'  # Default: fast GPU pipeline

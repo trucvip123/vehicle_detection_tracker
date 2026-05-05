@@ -62,12 +62,14 @@ class PlateProcessor:
         plate_model: Any, 
         ocr_reader: Any, 
         executor: ThreadPoolExecutor, 
-        log_func: Callable[[str], None]
+        log_func: Callable[[str], None],
+        frame_processor: Any = None
     ) -> None:
         self.plate_model = plate_model
         self.ocr_reader = ocr_reader
         self.executor = executor
         self.log = log_func
+        self.frame_processor = frame_processor  # For calling tracker reset at daily reset
         self.metrics = get_metrics_collector()  # Get metrics collector instance
         
         # Load detection config for batch processing
@@ -1663,22 +1665,33 @@ class PlateProcessor:
         if self._last_reset_date != today_str:
             with self._state_lock:
                 self._last_reset_date = today_str
-                self.log(f"[DAILY_RESET] Resetting daily tracking for {today_str}")
+                self.log(f"[DAILY_RESET] 🌅 Starting daily reset for {today_str}")
                 
-                # Clear all daily tracking data (fresh start for new day)
-                self.vehicle_plates.clear()
-                self.vehicle_plate_counts.clear()
-                self.vehicle_plate_counts_each_frame.clear()
-                self.vehicle_directions.clear()
-                self.vehicle_last_seen.clear()
-                self.vehicle_detected_plate_images.clear()
-                self.vehicle_pending_futures.clear()
-                self.vehicle_pending_task_count.clear()
-                self._vehicles_without_plate_logged.clear()
-                
-                reset_daily_tracking()  # Reset telegram notification tracking
-                
-                self.log(f"[DAILY_RESET] ✓ All daily tracking data reset for new day")
+                try:
+                    # Clear all daily tracking data (fresh start for new day)
+                    self.vehicle_plates.clear()
+                    self.vehicle_plate_counts.clear()
+                    self.vehicle_plate_counts_each_frame.clear()
+                    self.vehicle_directions.clear()
+                    self.vehicle_last_seen.clear()
+                    self.vehicle_detected_plate_images.clear()
+                    self.vehicle_pending_futures.clear()
+                    self.vehicle_pending_task_count.clear()
+                    self._vehicles_without_plate_logged.clear()
+                    
+                    reset_daily_tracking()  # Reset telegram notification tracking
+                    
+                    # IMPORTANT: Reset tracker to reset vehicle IDs (start from 1 again)
+                    if self.frame_processor is not None:
+                        self.frame_processor.reset_tracker()
+                    else:
+                        self.log("[DAILY_RESET] ⚠ Warning: frame_processor is None, tracker reset skipped")
+                    
+                    self.log(f"[DAILY_RESET] ✓ All daily tracking data and vehicle IDs reset for new day")
+                except Exception as e:
+                    import traceback
+                    error_trace = traceback.format_exc()
+                    self.log(f"[DAILY_RESET] ✗ ERROR during reset: {type(e).__name__}: {e}\n{error_trace}")
 
     def get_metrics(self) -> 'MetricsCollector':
         """

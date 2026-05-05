@@ -97,6 +97,8 @@ def send_notify_to_telegram(license_plate, direction, timestamp=None, image_path
 
     for attempt in range(max_retries):
         try:
+            file_timeout = base_timeout  # Default timeout
+            
             # If image_path is provided, send photo with caption
             if image_path and os.path.exists(image_path):
                 url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
@@ -126,9 +128,14 @@ def send_notify_to_telegram(license_plate, direction, timestamp=None, image_path
                         "parse_mode": "HTML",  # Changed to HTML as Markdown can cause issues with some characters
                     }
 
-                    # Use increased timeout for better reliability
+                    # Calculate timeout based on file size: ~1 second per 500KB + 30 seconds minimum
+                    # For 1.5MB file: 3 seconds + 30 = 33 seconds
+                    file_timeout = max(base_timeout, 30 + (file_size / (500 * 1024)))
+                    log(f"[Telegram] Upload timeout: {file_timeout:.1f}s (file size: {file_size / 1024:.1f}KB)", "telegram")
+
+                    # Use file-size-aware timeout for better reliability
                     response = requests.post(
-                        url, files=files, data=payload, timeout=base_timeout
+                        url, files=files, data=payload, timeout=file_timeout
                     )
                     response.raise_for_status()
                     try:
@@ -143,7 +150,7 @@ def send_notify_to_telegram(license_plate, direction, timestamp=None, image_path
                         return {
                             "ok": False,
                             "error": "invalid_json_response",
-                            "status_code": response.status_code,
+                            "status_code": response.status_code, 
                         }
             else:
                 # Send text message only
@@ -175,13 +182,16 @@ def send_notify_to_telegram(license_plate, direction, timestamp=None, image_path
             last_error = e
             if attempt < max_retries - 1:
                 delay = retry_delays[attempt]
+                timeout_used = file_timeout if image_path and os.path.exists(image_path) else base_timeout
                 log(
-                    f"[Telegram] Timeout kết nối (lần thử {attempt + 1}/{max_retries}), thử lại sau {delay} giây...",
+                    f"[Telegram] Timeout kết nối (lần thử {attempt + 1}/{max_retries}, timeout={timeout_used:.1f}s), thử lại sau {delay} giây...",
                     "telegram",
                 )
                 time.sleep(delay)
             else:
-                log(f"[Telegram] ❌ Timeout sau {max_retries} lần thử: {e}", "telegram")
+                timeout_used = file_timeout if image_path and os.path.exists(image_path) else base_timeout
+                log(f"[Telegram] ❌ Timeout sau {max_retries} lần thử (timeout={timeout_used:.1f}s): {e}", "telegram")
+                log(f"[Telegram] 💡 Kiểm tra kết nối internet hoặc tăng timeout trong cấu hình", "telegram")
 
         except requests.exceptions.ConnectionError as e:
             last_error = e
