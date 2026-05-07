@@ -460,14 +460,14 @@ def preprocess_plate_image(plate_image):
         return plate_image
 
 
-def _sync_plate_inference(plate_model, vehicle_frame, model_lock, size=None):
+def _sync_plate_inference(plate_model, square_frame, model_lock, size=None):
     """Run plate model synchronously in a thread-safe way and return results or None (YOLOv8)."""
     if plate_model is None:
         return None
 
-    # Check if vehicle_frame is valid
-    if vehicle_frame is None or vehicle_frame.size == 0:
-        _log("[PLATE_INFERENCE] ❌ vehicle_frame is None or empty")
+    # Check if square_frame is valid
+    if square_frame is None or square_frame.size == 0:
+        _log("[PLATE_INFERENCE] ❌ square_frame is None or empty")
         return None
 
     # Load config if size not specified
@@ -485,7 +485,7 @@ def _sync_plate_inference(plate_model, vehicle_frame, model_lock, size=None):
     try:
         with model_lock:
             # YOLOv8: inference with imgsz parameter
-            results = plate_model.predict(vehicle_frame, imgsz=size, verbose=False)
+            results = plate_model.predict(square_frame, imgsz=size, verbose=False)
             # Returns a list of Results objects, take the first one
             return results[0] if results else None
     except Exception as e:
@@ -493,7 +493,7 @@ def _sync_plate_inference(plate_model, vehicle_frame, model_lock, size=None):
         # Fallback: try without size parameter (use default)
         try:
             with model_lock:
-                results = plate_model.predict(vehicle_frame, verbose=False)
+                results = plate_model.predict(square_frame, verbose=False)
                 return results[0] if results else None
         except Exception as e2:
             _log(f"[PLATE_INFERENCE] ❌ Fallback inference also failed: {e2}")
@@ -524,7 +524,26 @@ def detect_license_plate_sync(
 
         # Run plate detection inference
         _log(f"[PLATE_DETECT] vehicle_id={track_id} Đang chạy plate model inference...")
-        results = _sync_plate_inference(plate_model, vehicle_frame, model_lock)
+
+        height, width = vehicle_frame.shape[:2]
+        mid_height = height // 2
+
+        # Crop nửa dưới
+        bottom_half = vehicle_frame[mid_height:, :, :]
+
+        # Lấy kích thước của bottom_half
+        bottom_height, bottom_width = bottom_half.shape[:2]
+
+        # Để thành hình vuông, dùng kích thước nhỏ hơn
+        square_size = min(bottom_height, bottom_width)
+
+        # Crop 2 bên để center
+        left = (bottom_width - square_size) // 2
+        right = left + square_size
+
+        square_frame = bottom_half[:, left:right, :]
+
+        results = _sync_plate_inference(plate_model, square_frame, model_lock)
 
         if results is None:
             _log(f"[PLATE_DETECT] vehicle_id={track_id} ❌ Inference results is None")
@@ -597,14 +616,14 @@ def detect_license_plate_sync(
             return {"text": None, "count": num_detections}
 
         # Validate bbox coordinates against frame dimensions to avoid index out of bounds
-        frame_height, frame_width = vehicle_frame.shape[:2]
+        frame_height, frame_width = square_frame.shape[:2]
         x1 = max(0, min(x1, frame_width - 1))
         y1 = max(0, min(y1, frame_height - 1))
         x2 = max(x1 + 1, min(x2, frame_width))
         y2 = max(y1 + 1, min(y2, frame_height))
 
         # Extract plate image
-        plate_image = vehicle_frame[y1:y2, x1:x2]
+        plate_image = square_frame[y1:y2, x1:x2]
         if plate_image.size == 0:
             _log(f"[PLATE_DETECT] vehicle_id={track_id} ❌ Plate image size = 0, return None")
             return {"text": None, "count": num_detections}

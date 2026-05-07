@@ -9,14 +9,26 @@ license_plate_detector = YOLO('model/license_plate_detector.pt')
 
 vehicles = [2, 3, 5, 7]
 
-image_path = r"D:\TrucNV\vehicle_detection_tracker\screenshots\20260206\164153_2\vehicle_frame_process_20260206_164153_916.png"
+image_path = r"screenshots\20260506\0628_13\vehicle_frame_20260506_062829_617.png"
 frame = cv2.imread(str(image_path))
-# detect license plates
-license_plates = license_plate_detector(frame)[0]
-for license_plate in license_plates.boxes.data.tolist():
-    x1, y1, x2, y2, score, class_id = license_plate
-    # crop license plate
-    license_plate_crop = frame[int(y1):int(y2), int(x1): int(x2), :]
 
-    cv2.imshow("license_plate_crop", license_plate_crop)
-    cv2.waitKey(0)
+height, width = frame.shape[:2]
+mid_height = height // 2
+
+# Crop nửa dưới
+bottom_half = frame[mid_height:, :, :]
+
+# Lấy kích thước của bottom_half
+bottom_height, bottom_width = bottom_half.shape[:2]
+
+# Để thành hình vuông, dùng kích thước nhỏ hơn
+square_size = min(bottom_height, bottom_width)
+
+# Crop 2 bên để center
+left = (bottom_width - square_size) // 2
+right = left + square_size
+
+square_frame = bottom_half[:, left:right, :]
+
+cv2.imshow("license_plate_crop", square_frame)
+cv2.waitKey(0)
