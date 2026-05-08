@@ -304,10 +304,10 @@ class VehicleDetectionTracker:
             print(f"[CLEANUP] ✓ Background tasks wait returned: {result}", flush=True)
         
         # Send notifications for all vehicles with completed tasks
-        print("[CLEANUP] ⏳ Step 2: Sending notifications for all completed vehicles...", flush=True)
-        sys.stdout.flush()
-        if hasattr(self, "plate_processor") and self.plate_processor:
-            self.plate_processor.send_notifications_for_completed_vehicles()
+        # print("[CLEANUP] ⏳ Step 2: Sending notifications for all completed vehicles...", flush=True)
+        # sys.stdout.flush()
+        # if hasattr(self, "plate_processor") and self.plate_processor:
+        #     self.plate_processor.send_notifications_for_completed_vehicles()
         
         # Shutdown the inference queue gracefully
         # This waits for all queued tasks + signals workers to exit (they're daemon threads)

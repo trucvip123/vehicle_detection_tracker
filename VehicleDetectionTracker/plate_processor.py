@@ -360,52 +360,63 @@ class PlateProcessor:
             self.log(f"[IMAGE_SELECT] vehicle_id={track_id} error finding image: {e}")
             return None
 
-    def _get_first_vehicle_image(self, vehicle_dir: str, track_id: int) -> Optional[str]:
+    def _get_first_vehicle_frame_image(self, vehicle_dir: str, track_id: int) -> Optional[str]:
         """
-        Get the first image file from the vehicle directory.
-        Used as fallback when no plates detected.
+        Get the first vehicle_frame_*.png image from the vehicle directory (by sequence number).
+        Looks for files with prefix 'vehicle_frame_' and returns the one with earliest sequence.
+        Used as fallback when no plates detected - prioritizes first captured frame.
         
         Args:
             vehicle_dir: Path to vehicle screenshots directory
             track_id: Vehicle track ID for logging
             
         Returns:
-            str: Path to first image file or None if not found
+            str: Path to first vehicle frame image (e.g., vehicle_frame_001.png) or None if not found
         """
         try:
             if os.path.exists(vehicle_dir):
-                # Find all PNG files in the directory
-                image_files = [
+                # Find all vehicle_frame_*.png files in the directory
+                vehicle_frame_files = [
                     f for f in os.listdir(vehicle_dir) 
-                    if f.endswith('.png')
+                    if f.startswith('vehicle_frame_') and f.endswith('.png')
                 ]
                 
-                if image_files:
-                    # Sort to get the largest image (best quality)
-                    image_sizes = []
-                    for img_file in image_files:
+                if vehicle_frame_files:
+                    # Extract sequence number from filename (e.g., "vehicle_frame_001.png" → 1)
+                    def extract_frame_number(filename):
+                        try:
+                            # Extract the number between 'vehicle_frame_' and '.png'
+                            # e.g., "vehicle_frame_001.png" → "001" → 1
+                            num_str = filename.replace('vehicle_frame_', '').replace('.png', '')
+                            return int(num_str)
+                        except:
+                            return float('inf')  # Put unparseable files at end
+                    
+                    # Sort by sequence number (ascending) to get the first frame
+                    vehicle_frame_files.sort(key=extract_frame_number)
+                    
+                    # Find the first valid (non-empty) image
+                    for img_file in vehicle_frame_files:
                         try:
                             img_path = os.path.join(vehicle_dir, img_file)
                             size = os.path.getsize(img_path)
-                            image_sizes.append((img_file, size))
+                            if size > 0:  # Only return non-empty files
+                                self.log(f"[PLATE] vehicle_id={track_id} found first vehicle_frame: {img_file} (size={size}, sequence={extract_frame_number(img_file)})")
+                                return img_path
                         except:
                             pass
                     
-                    if image_sizes:
-                        # Pick largest image
-                        image_sizes.sort(key=lambda x: x[1], reverse=True)
-                        best_image = image_sizes[0][0]
-                        image_path = os.path.join(vehicle_dir, best_image)
-                        self.log(f"[PLATE] vehicle_id={track_id} found largest image: {best_image}")
-                        return image_path
+                    # No valid vehicle_frame files found
+                    self.log(f"[PLATE] vehicle_id={track_id} no valid vehicle_frame images found in {vehicle_dir} ({len(vehicle_frame_files)} files total)")
+                    return None
                 else:
-                    self.log(f"[PLATE] vehicle_id={track_id} no images found in {vehicle_dir}")
+                    self.log(f"[PLATE] vehicle_id={track_id} no vehicle_frame_*.png images found in {vehicle_dir}")
                     return None
             else:
                 self.log(f"[PLATE] vehicle_id={track_id} directory not found: {vehicle_dir}")
                 return None
         except Exception as e:
-            self.log(f"[PLATE] vehicle_id={track_id} error finding image: {e}")
+            self.log(f"[PLATE] vehicle_id={track_id} error finding first vehicle_frame image: {e}")
             return None
 
     @staticmethod
@@ -777,11 +788,22 @@ class PlateProcessor:
                     # This way ensures we don't send twice (once from executor, once from queue)
                     if total_pending == 0:
                         self.log(f"[PLATE_QUEUE] vehicle_id={track_id} ✓✓ ALL tasks complete (queue + executor). Sending final notification...")
-                        vehicle_dir = f"screenshots/{track_id}"
+                        
+                        # Reconstruct vehicle_dir from timestamp (to get correct YYYYMMDD/HHMM_track_id structure)
+                        vehicle_last_seen_copy = self.get_vehicle_last_seen_copy()
+                        reconstructed_vehicle_dir = None
+                        if track_id in vehicle_last_seen_copy:
+                            date_str = vehicle_last_seen_copy[track_id].strftime("%Y%m%d")
+                            pattern = f"screenshots/{date_str}/*_{track_id}"
+                            import glob as glob_module
+                            matching_dirs = glob_module.glob(pattern)
+                            if matching_dirs:
+                                reconstructed_vehicle_dir = matching_dirs[0]
+                                self.log(f"[PLATE_QUEUE] vehicle_id={track_id} Reconstructed vehicle_dir: {reconstructed_vehicle_dir}")
                         
                         # Send notification OUTSIDE the lock to avoid blocking
                         try:
-                            result = self.send_final_vehicle_notification(track_id, vehicle_dir=vehicle_dir)
+                            result = self.send_final_vehicle_notification(track_id, vehicle_dir=reconstructed_vehicle_dir)
                             if result:
                                 self.log(f"[PLATE_QUEUE] vehicle_id={track_id} ✓ Notification sent successfully")
                             else:
@@ -1279,7 +1301,7 @@ class PlateProcessor:
     def send_notifications_for_completed_vehicles(self) -> None:
         """
         Send notifications for any remaining vehicles that haven't been notified yet.
-        This is called during cleanup when video ends (fallback for vehicles with pending tasks).
+ n        This is called during cleanup when video ends (fallback for vehicles with pending tasks).
         Most notifications should already be sent via _on_plate_task_complete callbacks.
         """
         import time
@@ -1518,6 +1540,58 @@ class PlateProcessor:
                         _vehicle_telegram_sent_with_plate.add(vehicle_uuid)
                     
                     self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ✓ Final notification sent with plate={plate_text}")
+                    # Record successful notification in metrics
+                    self.metrics.record_notification_sent(success=True, api_call=True)
+                    notification_sent = True
+                else:
+                    self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ⚠ Telegram API failed, will retry later")
+                    # Record failed notification in metrics
+                    self.metrics.record_notification_sent(success=False, api_call=True)
+                    notification_sent = False
+            
+            # Case 2: No valid plate detected (all tasks complete, but plate detection failed)
+            # Still send notification with "UNDETECTED" and first available image
+            if not is_valid_plate:
+                self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) Sending final notification WITHOUT PLATE (UNDETECTED)")
+                
+                # Get first available image from vehicle directory
+                image_path = None
+                if vehicle_dir:
+                    image_path = self._get_first_vehicle_frame_image(vehicle_dir, track_id)
+                    if image_path:
+                        self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ✓ Found first image: {image_path}")
+                    else:
+                        self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ⚠ No image found in {vehicle_dir}")
+                else:
+                    self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ⚠ No vehicle_dir provided for undetected plate")
+                
+                # Use "UNDETECTED" as plate text for notification
+                undetected_plate_text = "UNDETECTED"
+                
+                # Send notification with "UNDETECTED" plate (OUTSIDE of lock)
+                self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ► Calling Telegram API with image_path={image_path}, plate_text=UNDETECTED...")
+                try:
+                    # === TIME BLOCK: TELEGRAM SEND ===
+                    # with time_block(f"[TELEGRAM_SEND] vehicle_id={track_id}", self.log):
+                    telegram_response = send_notify_to_telegram(
+                        undetected_plate_text,
+                        direction_label,
+                        frame_timestamp,
+                        image_path=image_path,
+                    )
+                    self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ✓ Telegram API call completed (success={telegram_response.get('ok', False)})")
+                except Exception as e:
+                    self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ✗ Telegram API error: {e}")
+                    telegram_response = {"ok": False, "error": str(e)}
+                
+                # Only mark as sent if Telegram API succeeded (check 'ok' field)
+                telegram_success = telegram_response.get("ok", False)
+                if telegram_success:
+                    # Now update tracking status inside lock (store UUID, not track_id)
+                    with _vehicle_telegram_sent_lock:
+                        _vehicle_telegram_sent_without_plate.add(vehicle_uuid)
+                    
+                    self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ✓ Final notification sent WITHOUT plate (UNDETECTED)")
                     # Record successful notification in metrics
                     self.metrics.record_notification_sent(success=True, api_call=True)
                     notification_sent = True
