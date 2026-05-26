@@ -44,6 +44,13 @@ class FrameProcessor:
         # Flag to skip persistence on first frame after reset
         self._force_fresh_tracker_next_frame = False
         
+        # Persistent track ID mapping (NO timeout-based recycling during day!)
+        # IDs increment continuously: 1, 2, 3, 4... until midnight daily reset
+        self._next_track_id = 1  # Next ID to assign (increments monotonically during session)
+        self._bytetrack_to_persistent_id = {}  # Map: ByteTrack ID → persistent ID
+        self._retired_track_ids = set()  # Track IDs that have been used
+        self._last_frame_bytetrack_ids = set()  # Track IDs from previous frame (detect reuse)
+        
         # Load config for detection and tracking
         self.detection_config = get_detection_config()
         self.vehicle_classes = self.detection_config.get(
@@ -121,6 +128,13 @@ class FrameProcessor:
             self.vehicle_timestamps.clear()
             self._prev_active_vehicle_ids.clear()
             
+            # Reset persistent track ID mapping for new day
+            self._next_track_id = 1
+            self._bytetrack_to_persistent_id.clear()
+            self._retired_track_ids.clear()
+            self._last_frame_bytetrack_ids.clear()
+            
+            self.log("[TRACKER_RESET] 🔄 RESET CALLED - Vehicle ID will reset on next frame (persist=False)")
             self.log("[TRACKER_RESET] ✓ Vehicle ID reset prepared - next frame will reinitialize tracker")
             
         except Exception as e:
@@ -128,6 +142,31 @@ class FrameProcessor:
             error_trace = traceback.format_exc()
             self.log(f"[TRACKER_RESET] ⚠ Warning during tracker reset: {type(e).__name__}: {e}\n{error_trace}")
             # Non-critical error - system will continue with tracking
+
+    def get_persistent_track_id(self, bytetrack_id: int, current_time: datetime = None) -> int:
+        """
+        Map ByteTrack ID to a persistent, non-reusable track ID.
+        
+        NO timeout-based recycling during the day!
+        Persistent IDs increment continuously until midnight (daily reset only).
+        
+        Args:
+            bytetrack_id: ID assigned by ByteTrack for current frame
+            current_time: Current frame timestamp (unused - kept for compatibility)
+            
+        Returns:
+            Persistent track ID (monotonically increasing, resets only at midnight)
+        """
+        # === ASSIGN NEW PERSISTENT ID OR RETURN EXISTING ===
+        if bytetrack_id not in self._bytetrack_to_persistent_id:
+            # New ByteTrack ID - assign next persistent ID (no timeout recycling!)
+            persistent_id = self._next_track_id
+            self._bytetrack_to_persistent_id[bytetrack_id] = persistent_id
+            self._retired_track_ids.add(persistent_id)
+            self._next_track_id += 1
+            self.log(f"[PERSIST_ID] New vehicle: ByteTrack={bytetrack_id} → Persistent={persistent_id}")
+        
+        return self._bytetrack_to_persistent_id[bytetrack_id]
 
     def process_frame_streaming(self, frame: np.ndarray, frame_timestamp: datetime, plate_processor: Any) -> np.ndarray:
         """
@@ -159,6 +198,9 @@ class FrameProcessor:
             self._force_fresh_tracker_next_frame = False
             self.log("[TRACK] First frame after reset - using fresh tracker (persist=False)")
         
+        # DEBUG: Log tracking state for each frame
+        # self.log(f"[TRACK_DEBUG] Processing frame - use_persist={use_persist}, _force_fresh_tracker_next_frame={self._force_fresh_tracker_next_frame}")
+        
         results = self.model.track(
             frame,
             persist=use_persist,
@@ -188,6 +230,49 @@ class FrameProcessor:
             )
             current_track_ids = set(track_ids)
 
+            # === DETECT BYTETRACK REUSE AND CLEAR OLD MAPPINGS ===
+            # ByteTrack reuses IDs when vehicles disappear for > 300 seconds.
+            # When all ByteTrack IDs change AND we have old mappings:
+            # 1. Clear ByteTrack→Persistent mappings (allow new assignments)
+            # 2. Keep persistent ID counter ticking UP (don't reset to 1!)
+            # 3. Clear old vehicle data from plate_processor (UUID, direction, plates)
+            if (
+                current_track_ids and 
+                self._bytetrack_to_persistent_id and 
+                not current_track_ids.intersection(self._last_frame_bytetrack_ids)
+            ):
+                # No overlap between current and previous frame ByteTrack IDs
+                # AND we have old mappings: ByteTrack likely reset
+                old_mappings = dict(self._bytetrack_to_persistent_id)
+                old_persistent_ids = list(old_mappings.values())
+                
+                self.log(
+                    f"[TRACK_REUSE] ⚠️ ByteTrack ID reuse detected! "
+                    f"Current={sorted(current_track_ids)}, "
+                    f"Previous={sorted(self._last_frame_bytetrack_ids)}, "
+                    f"Old_Mappings={old_mappings}"
+                )
+                
+                # Clear old ByteTrack→Persistent mappings only (keep counter ticking)
+                self._bytetrack_to_persistent_id.clear()
+                # ⚠️ IMPORTANT: DO NOT reset _next_track_id=1! Keep it incrementing
+                # This ensures persistent IDs keep going: 1,2,3,4,5... (not 1,1,1,1)
+                
+                self.log(
+                    f"[TRACK_REUSE] ✓ Cleared ByteTrack mappings. "
+                    f"Persistent ID counter keeps incrementing (current={self._next_track_id}). "
+                    f"Cleaning old vehicle data from plate_processor for old IDs: {old_persistent_ids}"
+                )
+                
+                # Clear old vehicle data (UUID mapping, direction, plates) from plate_processor
+                # so new vehicles with same persistent IDs won't inherit old data
+                for old_persistent_id in old_persistent_ids:
+                    plate_processor.clear_vehicle_data(old_persistent_id)
+                    self.log(f"[TRACK_REUSE] ✓ Cleared plate_processor data for old persistent_id={old_persistent_id}")
+            
+            # Update last frame IDs for next iteration
+            self._last_frame_bytetrack_ids = current_track_ids.copy()
+
             # Log all currently detected vehicle IDs
             self.log(
                 f"[TRACK] Current detected vehicle IDs: {sorted(list(current_track_ids))}"
@@ -212,13 +297,19 @@ class FrameProcessor:
             # Collect vehicles for batch processing
             frame_vehicles_batch = {}
 
-            for box, track_id, class_id in zip(boxes, track_ids, class_id_list):
+            for box, bytetrack_id, class_id in zip(boxes, track_ids, class_id_list):
+                # Convert ByteTrack ID to persistent ID (no timeout recycling - only at midnight!)
+                track_id = self.get_persistent_track_id(bytetrack_id)
+                
                 class_name = coco_class_map.get(class_id, str(class_id))
                 x, y, w, h = box
-                # print(
-                #     f"[DEBUG] Processing track_id={track_id}, class_id={class_id}, box=({x},{y},{w},{h})"
-                # )
+                print(
+                    f"[DEBUG] Processing track_id={track_id}, class_id={class_id}, box=({x},{y},{w},{h})"
+                )
                 if w < 230 or h < 90 or y - h / 2 < 10:
+                    self.log(
+                        f"[TRACK] vehicle_id={track_id} Skipping small/low vehicle: box=({x:.1f},{y:.1f},{w:.1f},{h:.1f})"
+                    )
                     continue
 
                 vehicle_dir = f"screenshots/{date_str}/{time_str}_{track_id}"
@@ -238,7 +329,7 @@ class FrameProcessor:
                     filename = f"{vehicle_dir}/vehicle_frame_{timestamp_str}.png"
                     # filename_process = f"{vehicle_dir}/vehicle_frame_process_{timestamp_str}.png"
                     cv2.imwrite(filename, vehicle_frame_save_img)
-                    # cv2.imwrite(filename_process, vehicle_frame)
+                    self.log(f"[FRAME] Saved vehicle frame for track_id={track_id} at {filename}")
                 except Exception as e:
                     self.log(f"Error saving frame: {e}")
 

@@ -249,32 +249,37 @@ def save_daily_vehicle_summary(
         plate_summary = {}
         for track_id in vehicles_today:
             plate_text = vehicle_plates.get(track_id, "unknown")
+            # Fallback: if primary plate is missing/unknown, use best plate from plate_counts history
+            # (happens when vehicle_plates is cleared after ByteTrack ID reuse)
+            if (not plate_text or str(plate_text).strip().lower() == "unknown") and track_id in vehicle_plate_counts:
+                counts = vehicle_plate_counts.get(track_id, {})
+                if counts:
+                    plate_text = max(counts, key=counts.get)
+            if not plate_text:
+                plate_text = "unknown"
             if plate_text not in plate_summary:
                 plate_summary[plate_text] = 0
-            # Get detection count for this vehicle (default to 1 if not found)
-            if track_id in vehicle_plate_counts and plate_text in vehicle_plate_counts[track_id]:
-                detection_count = vehicle_plate_counts[track_id][plate_text]
-            else:
-                detection_count = 1
-            plate_summary[plate_text] += detection_count
+            # Each track_id is 1 physical vehicle - always count as 1
+            plate_summary[plate_text] += 1
         
         # Merge similar plates (differ by 1-2 characters)
         plate_summary = merge_similar_plates(plate_summary, log_func)
         
-        # Filter out unknown/None plates from the summary
+        # Separate identified plates from unknown ones
         plate_summary_filtered = {
             plate: count for plate, count in plate_summary.items()
-            if plate and str(plate).strip().lower() != "unknown"
+            if plate and str(plate).strip().lower() not in ("unknown", "")
         }
-        
-        # Count vehicles with identified plates (for summary)
-        vehicles_with_plates = sum(plate_summary_filtered.values()) if plate_summary_filtered else 0
-        
+        unknown_count = plate_summary.get("unknown", 0) + plate_summary.get("", 0)
+        # Any vehicles_today not covered by identified plates are also unknown
+        identified_vehicle_count = sum(plate_summary_filtered.values())
+        unknown_count = len(vehicles_today) - identified_vehicle_count
+
         # Format date for readable display: YYYYMMDD -> YYYY-MM-DD
         formatted_date = f"{date_str[0:4]}-{date_str[4:6]}-{date_str[6:8]}"
         
-        # Build detailed message (only include vehicles with identified plates)
-        msg = f"Tổng hợp xe vào ngày {formatted_date}: {vehicles_with_plates} xe vào khu vực mỏ\n"
+        # Build detailed message
+        msg = f"Tổng hợp xe vào ngày {formatted_date}: {len(vehicles_today)} xe vào khu vực mỏ\n"
         msg += "━" * 30 + "\n"
         
         # Sort plates by count (highest first) then alphabetically
@@ -285,6 +290,9 @@ def save_daily_vehicle_summary(
         
         for plate_text, count in sorted_plates:
             msg += f"📍 Biển số {plate_text}: {count} xe\n"
+        
+        if unknown_count > 0:
+            msg += f"❓ Không nhận dạng được biển số: {unknown_count} xe\n"
         
         msg += "━" * 30
         

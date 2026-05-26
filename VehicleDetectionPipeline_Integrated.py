@@ -60,6 +60,8 @@ class IntegratedVehicleDetectionPipeline:
         """
         self.mode = mode
         self.logger = logger
+        self.tracker = None
+        self.pipeline = None
         
         logger.info("\n" + "="*80)
         logger.info("INTEGRATED VEHICLE DETECTION PIPELINE - INITIALIZATION")
@@ -75,15 +77,34 @@ class IntegratedVehicleDetectionPipeline:
                 use_gpu=True,
                 inference_resolution=(1280, 720)
             )
-            self.tracker = None
             logger.info("[INIT] OK GPU Pipeline loaded - Ready for fast inference")
             
-        elif mode == 'tracker' and TRACKER_AVAILABLE:
+        elif mode == 'tracker':
             # Tracker mode (full features - vehicle tracking + telegram)
-            logger.info("[INIT] Initializing VehicleDetectionTracker (Full Mode)")
-            self.tracker = VehicleDetectionTracker()
-            self.pipeline = None
-            logger.info("[INIT] OK VehicleDetectionTracker loaded - Ready for full pipeline")
+            if not TRACKER_AVAILABLE:
+                logger.error("[INIT] ERROR: VehicleDetectionTracker not available - falling back to GPU mode")
+                self.mode = 'gpu'
+                self.pipeline = GPUPipelineSimple(
+                    model_path="model/yolov8n.pt",
+                    confidence=0.5,
+                    use_gpu=True,
+                    inference_resolution=(1280, 720)
+                )
+                logger.info("[INIT] OK GPU Pipeline loaded as fallback")
+            else:
+                logger.info("[INIT] Initializing VehicleDetectionTracker (Full Mode)")
+                self.tracker = VehicleDetectionTracker()
+                logger.info("[INIT] OK VehicleDetectionTracker loaded - Ready for full pipeline")
+        else:
+            logger.error(f"[INIT] ERROR: Unknown mode '{mode}' - falling back to GPU mode")
+            self.mode = 'gpu'
+            self.pipeline = GPUPipelineSimple(
+                model_path="model/yolov8n.pt",
+                confidence=0.5,
+                use_gpu=True,
+                inference_resolution=(1280, 720)
+            )
+            logger.info("[INIT] OK GPU Pipeline loaded as fallback")
       
         self.stats = {
             'frames_processed': 0,
@@ -127,6 +148,11 @@ class IntegratedVehicleDetectionPipeline:
         logger.info("[GPU]  Expected FPS: 15-20 on RTSP")
         logger.info("[GPU]  Press 'q' to stop")
         
+        # Safety check: ensure pipeline is initialized
+        if self.pipeline is None:
+            logger.error("[ERROR] GPU Pipeline is not initialized!")
+            return None
+        
         try:
             stats = self.pipeline.process_stream_file(
                 video_path=video_source,
@@ -165,6 +191,11 @@ class IntegratedVehicleDetectionPipeline:
         logger.info("[TRACKER] Pipeline: Vehicle Detection > License Plate > OCR > Telegram")
         logger.info("[TRACKER] Features: Vehicle tracking, plate OCR, Telegram notifications")
         logger.info("[TRACKER] Press 'q' to stop")
+        
+        # Safety check: ensure tracker is initialized
+        if self.tracker is None:
+            logger.error("[ERROR] VehicleDetectionTracker is not initialized!")
+            return None
         
         try:
             # Use VehicleDetectionTracker for full pipeline
@@ -241,8 +272,8 @@ def main():
     logger.info("="*80)
     
     # Configuration  
-    RTSP_URL = "rtsp://admin:MOVYKV@aicamera.servemp3.com:554/Streaming/Channels/101"
-    # RTSP_URL = "video/0204.mp4"  # For testing with local video, comment out for RTSP
+    RTSP_URL = "rtsp://admin:MOVYKV@aicamera.dienthanhliem.com:554/Streaming/Channels/101"
+    # RTSP_URL = "video/1705.mp4"  # For testing with local video, comment out for RTSP
 
     # Mode selection
     mode = 'gpu'  # Default: fast GPU pipeline

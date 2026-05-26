@@ -6,6 +6,7 @@ import cv2
 import json
 import os
 import uuid
+import time
 from concurrent.futures import ThreadPoolExecutor, wait, ALL_COMPLETED
 from typing import Dict, Set, Optional, Tuple, Callable, Any, List
 from difflib import SequenceMatcher
@@ -37,6 +38,13 @@ _vehicle_telegram_sent_lock = threading.RLock()  # RLock to allow reentrant lock
 _track_id_to_uuid = {}  # {track_id: uuid_string}
 _uuid_mapping_lock = threading.RLock()  # Lock for UUID mapping updates
 
+# Track last frame received time for each vehicle (for timeout-based notification)
+# Purpose: Wait until vehicle hasn't been seen for 2+ seconds before sending notification
+# This ensures all queued frames are processed before final notification is sent
+_last_frame_received_time = {}  # {track_id: timestamp}
+_last_frame_time_lock = threading.RLock()  # Lock for timestamp updates
+VEHICLE_NOTIFICATION_TIMEOUT_SECONDS = 2.0  # Wait 2 seconds without new frames before sending notification
+
 
 def reset_telegram_sent() -> None:
     """Reset the telegram sent tracking sets."""
@@ -47,11 +55,14 @@ def reset_telegram_sent() -> None:
 
 def reset_daily_tracking() -> None:
     """Reset daily tracking data (to be called at midnight or start of new day)."""
-    global _track_id_to_uuid, _uuid_mapping_lock
+    global _track_id_to_uuid, _uuid_mapping_lock, _last_frame_received_time, _last_frame_time_lock
     reset_telegram_sent()
     # Reset UUID mapping only at new day (not on system restart)
     with _uuid_mapping_lock:
         _track_id_to_uuid.clear()
+    # Reset last frame received time tracking
+    with _last_frame_time_lock:
+        _last_frame_received_time.clear()
 
 
 class PlateProcessor:
@@ -224,6 +235,53 @@ class PlateProcessor:
         """Thread-safe copy of vehicle_last_seen dict for reading."""
         with self._state_lock:
             return self.vehicle_last_seen.copy()
+
+    def clear_vehicle_data(self, track_id: int) -> None:
+        """
+        Clear all vehicle data for a given track_id when ByteTrack reuse detected.
+        IMPORTANT: Does NOT clear vehicle_directions - needed for sending final notifications!
+        IMPORTANT: Does NOT clear vehicle_plate_counts - needed for end-of-day summary!
+        
+        Clears:
+        - vehicle_plates[track_id] (to allow new plate detection)
+        - vehicle_plate_counts_each_frame[track_id] (to reset frame counts)
+        - UUID mapping for track_id (to allow new UUID for new vehicle)
+        - Notification status for track_id's UUID (to allow new vehicle to send notification)
+        
+        PRESERVES:
+        - vehicle_directions[track_id] (needed for final notification after cleanup)
+        - vehicle_last_seen[track_id] (may be useful for state file)
+        - vehicle_plate_counts[track_id] (historical record for end-of-day summary)
+        
+        Args:
+            track_id: Vehicle track ID to clear
+        """
+        try:
+            # Clear vehicle state but KEEP direction (needed for notifications)
+            with self._state_lock:
+                self.vehicle_plates.pop(track_id, None)
+                # ⚠️ IMPORTANT: DO NOT clear vehicle_plate_counts - needed for end-of-day summary!
+                #               Persistent IDs never get reused, so counts from old vehicle are safe to keep.
+                self.vehicle_plate_counts_each_frame.pop(track_id, None)
+                # ⚠️ IMPORTANT: DO NOT clear vehicle_directions - needed for final notification!
+                # ⚠️ IMPORTANT: DO NOT clear vehicle_last_seen - useful for state persistence
+            
+            # Clear UUID mapping for this track_id (allow new UUID for reused track_id)
+            global _track_id_to_uuid, _uuid_mapping_lock
+            with _uuid_mapping_lock:
+                old_uuid = _track_id_to_uuid.pop(track_id, None)
+            
+            # Clear notification status for this UUID (allow new vehicle with same track_id to send notification)
+            if old_uuid:
+                global _vehicle_telegram_sent_with_plate, _vehicle_telegram_sent_without_plate, _vehicle_telegram_sent_lock
+                with _vehicle_telegram_sent_lock:
+                    _vehicle_telegram_sent_with_plate.discard(old_uuid)
+                    _vehicle_telegram_sent_without_plate.discard(old_uuid)
+            
+            self.log(f"[CLEAR_DATA] vehicle_id={track_id} ✓ Cleared plates/counts only (preserving direction for notification) (uuid={old_uuid[:8] if old_uuid else 'None'})")
+            
+        except Exception as e:
+            self.log(f"[CLEAR_DATA] vehicle_id={track_id} ❌ Error clearing data: {e}")
 
     def save_daily_vehicle_summary(self, date_str: Optional[str] = None) -> None:
         """
@@ -538,14 +596,8 @@ class PlateProcessor:
         self.log(f"[PLATE] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) Processing plate background")
         try:
             self.log(f"[PLATE] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ► Starting background plate detection")
-            # EARLY CHECK: Skip if vehicle already notified (to avoid stale background tasks)
-            with _vehicle_telegram_sent_lock:
-                if vehicle_uuid in _vehicle_telegram_sent_with_plate or vehicle_uuid in _vehicle_telegram_sent_without_plate:
-                    self.log(f"[PLATE] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) Vehicle already has notification sent, skipping background processing (stale task)")
-                    return
+            # NOTE: Removed notification status check - allow same vehicle to process multiple times per day
             
-            # === TIME BLOCK: STATE UPDATE ===
-            # with time_block(f"[STATE_UPDATE] vehicle_id={track_id}", self.log):
             # Update last_seen timestamp and direction (thread-safe)
             with self._state_lock:
                 if frame_timestamp:
@@ -558,8 +610,13 @@ class PlateProcessor:
                 elif track_id not in self.vehicle_directions:
                     self.vehicle_directions[track_id] = "Unknown"
 
-            # === TIME BLOCK: PLATE DETECTION SUBMISSION ===
-            # with time_block(f"[SUBMIT_PLATE] vehicle_id={track_id}", self.log):
+            # Update last frame received time (for timeout-based final notification)
+            # This helps us know when vehicle stops appearing in frames
+            global _last_frame_received_time, _last_frame_time_lock
+            with _last_frame_time_lock:
+                _last_frame_received_time[track_id] = time.time()
+                self.log(f"[PLATE] vehicle_id={track_id} Updated last frame received time for timeout tracking")
+
             # Submit plate detection to inference queue asynchronously
             # This avoids model_lock bottleneck by queuing tasks
             self.log(f"[PLATE] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) Submitting plate detection to inference queue...")
@@ -636,8 +693,6 @@ class PlateProcessor:
             self.log(f"[PLATE_RESULT] vehicle_id={track_id} Detection result: plate={plate_text}, count={count_detections}, confidence={confidence:.3f}")
             log_plate(track_id, f"detected_plate={plate_text}")
             
-            # === TIME BLOCK: DIRECTION CHECK ===
-            # with time_block(f"[DIRECTION_CHECK] vehicle_id={track_id}", self.log):
             # Only send notifications for vehicles entering (not exiting)
             # Must contain "bottom" to be confirmed as entering
             # Skip if direction contains "top" (exit/ra khỏi) or is "Unknown"
@@ -657,14 +712,10 @@ class PlateProcessor:
             # Notifications will be sent when vehicle disappears (in frame_processor.py)
             # === TIME BLOCK: ACCUMULATE PLATE DATA ===
             # with time_block(f"[ACCUMULATE] vehicle_id={track_id}", self.log):
-            with _vehicle_telegram_sent_lock:
-                # SECOND CHECK: Skip if already notified (double-check before accumulating)
-                if track_id in _vehicle_telegram_sent_with_plate or track_id in _vehicle_telegram_sent_without_plate:
-                    self.log(f"[PLATE] vehicle_id={track_id} Vehicle notification sent while detecting, skipping accumulation")
-                    return
-                
-                # Only accumulate plate detections (no immediate notification)
-                if plate_text and plate_text != "unknown":
+            # NOTE: Removed notification status check - allow same vehicle to accumulate multiple times per day
+            
+            # Only accumulate plate detections (no immediate notification)
+            if plate_text and plate_text != "unknown":
                     self.log(f"[PLATE] vehicle_id={track_id} ► Processing valid plate detection: {plate_text}")
                     # Check if this is first detection for this track_id
                     is_first_detection = track_id not in self.vehicle_plate_counts_each_frame
@@ -787,29 +838,37 @@ class PlateProcessor:
                     # If ALL tasks (executor + queue) are done, send notification from queue callback
                     # This way ensures we don't send twice (once from executor, once from queue)
                     if total_pending == 0:
-                        self.log(f"[PLATE_QUEUE] vehicle_id={track_id} ✓✓ ALL tasks complete (queue + executor). Sending final notification...")
+                        self.log(f"[PLATE_QUEUE] vehicle_id={track_id} ✓✓ ALL tasks complete (queue + executor).")
                         
-                        # Reconstruct vehicle_dir from timestamp (to get correct YYYYMMDD/HHMM_track_id structure)
-                        vehicle_last_seen_copy = self.get_vehicle_last_seen_copy()
-                        reconstructed_vehicle_dir = None
-                        if track_id in vehicle_last_seen_copy:
-                            date_str = vehicle_last_seen_copy[track_id].strftime("%Y%m%d")
-                            pattern = f"screenshots/{date_str}/*_{track_id}"
-                            import glob as glob_module
-                            matching_dirs = glob_module.glob(pattern)
-                            if matching_dirs:
-                                reconstructed_vehicle_dir = matching_dirs[0]
-                                self.log(f"[PLATE_QUEUE] vehicle_id={track_id} Reconstructed vehicle_dir: {reconstructed_vehicle_dir}")
-                        
-                        # Send notification OUTSIDE the lock to avoid blocking
-                        try:
-                            result = self.send_final_vehicle_notification(track_id, vehicle_dir=reconstructed_vehicle_dir)
-                            if result:
-                                self.log(f"[PLATE_QUEUE] vehicle_id={track_id} ✓ Notification sent successfully")
-                            else:
-                                self.log(f"[PLATE_QUEUE] vehicle_id={track_id} ⚠ Notification sending failed or skipped")
-                        except Exception as ex:
-                            self.log(f"[PLATE_QUEUE] vehicle_id={track_id} ❌ Error sending notification: {ex}")
+                        # Check if vehicle has timed out (no new frames for 2+ seconds)
+                        # This is critical - we want to ensure NO MORE FRAMES are coming before sending final notification
+                        if self._is_vehicle_ready_to_notify(track_id):
+                            self.log(f"[PLATE_QUEUE] vehicle_id={track_id} Vehicle timed out - OK to send final notification")
+                            
+                            # Reconstruct vehicle_dir from timestamp (to get correct YYYYMMDD/HHMM_track_id structure)
+                            vehicle_last_seen_copy = self.get_vehicle_last_seen_copy()
+                            reconstructed_vehicle_dir = None
+                            if track_id in vehicle_last_seen_copy:
+                                date_str = vehicle_last_seen_copy[track_id].strftime("%Y%m%d")
+                                pattern = f"screenshots/{date_str}/*_{track_id}"
+                                import glob as glob_module
+                                matching_dirs = glob_module.glob(pattern)
+                                if matching_dirs:
+                                    reconstructed_vehicle_dir = matching_dirs[-1]
+                                    self.log(f"[PLATE_QUEUE] vehicle_id={track_id} Reconstructed vehicle_dir: {reconstructed_vehicle_dir}")
+                            
+                            # Send notification OUTSIDE the lock to avoid blocking
+                            try:
+                                result = self.send_final_vehicle_notification(track_id, vehicle_dir=reconstructed_vehicle_dir)
+                                if result:
+                                    self.log(f"[PLATE_QUEUE] vehicle_id={track_id} ✓ Notification sent successfully")
+                                else:
+                                    self.log(f"[PLATE_QUEUE] vehicle_id={track_id} ⚠ Notification sending failed or skipped")
+                            except Exception as ex:
+                                self.log(f"[PLATE_QUEUE] vehicle_id={track_id} ❌ Error sending notification: {ex}")
+                        else:
+                            # Not timed out yet - don't send notification, wait for timeout or next frame
+                            self.log(f"[PLATE_QUEUE] vehicle_id={track_id} ⏳ Tasks done but vehicle NOT timed out yet - waiting for timeout or more frames...")
                         
                         # Clean up when completely done
                         self.vehicle_pending_queue_tasks.pop(track_id, None)
@@ -1109,6 +1168,82 @@ class PlateProcessor:
             import traceback
             self.log(traceback.format_exc())
 
+    def _check_and_notify_timed_out_vehicles(self) -> None:
+        """
+        Check for vehicles that have timed out (no new frames for TIMEOUT_SECONDS)
+        and send their final notifications if all tasks are complete.
+        
+        This is called periodically or at specific checkpoints to ensure notifications
+        are sent even if no new queue callbacks arrive after the timeout expires.
+        """
+        global _last_frame_received_time, _last_frame_time_lock, _vehicle_telegram_sent_with_plate, _vehicle_telegram_sent_lock
+        
+        # Get list of vehicles to check
+        with _last_frame_time_lock:
+            vehicles_to_check = list(_last_frame_received_time.keys())
+        
+        for track_id in vehicles_to_check:
+            # Skip if already sent with valid plate
+            vehicle_uuid = self.get_or_create_uuid(track_id)
+            with _vehicle_telegram_sent_lock:
+                if vehicle_uuid in _vehicle_telegram_sent_with_plate:
+                    continue
+            
+            # Check if this vehicle is ready to notify (timed out)
+            if not self._is_vehicle_ready_to_notify(track_id):
+                continue  # Not ready yet
+            
+            # Check if all tasks are complete
+            with self._task_count_lock:
+                executor_tasks = self.vehicle_pending_task_count.get(track_id, 0)
+                queue_tasks = self.vehicle_pending_queue_tasks.get(track_id, 0)
+                total_tasks = executor_tasks + queue_tasks
+            
+            if total_tasks == 0:
+                # All tasks done AND vehicle timed out - send notification
+                self.log(f"[TIMEOUT_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) Detected timeout with all tasks complete - sending notification...")
+                
+                # Get vehicle direction
+                with self._state_lock:
+                    direction = self.vehicle_directions.get(track_id, "Unknown")
+                
+                result = self.send_final_vehicle_notification(track_id, vehicle_dir=direction)
+                if result:
+                    self.log(f"[TIMEOUT_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ✓ Notification sent successfully")
+                else:
+                    self.log(f"[TIMEOUT_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ⚠ Notification sending failed or skipped")
+
+    def _is_vehicle_ready_to_notify(self, track_id: int) -> bool:
+        """
+        Check if a vehicle is ready for final notification based on timeout.
+        Vehicle is ready when no new frames have arrived for TIMEOUT_SECONDS.
+        
+        Args:
+            track_id: Vehicle track ID
+            
+        Returns:
+            bool: True if vehicle has timed out and should send notification
+        """
+        global _last_frame_received_time, _last_frame_time_lock
+        
+        with _last_frame_time_lock:
+            if track_id not in _last_frame_received_time:
+                # No frame ever received for this vehicle, not ready
+                return False
+            
+            last_frame_time = _last_frame_received_time[track_id]
+            current_time = time.time()
+            time_since_last_frame = current_time - last_frame_time
+            
+            is_ready = time_since_last_frame >= VEHICLE_NOTIFICATION_TIMEOUT_SECONDS
+            
+            if is_ready:
+                self.log(f"[TIMEOUT_CHECK] vehicle_id={track_id} ✓ Ready to notify - no frames for {time_since_last_frame:.1f}s (timeout={VEHICLE_NOTIFICATION_TIMEOUT_SECONDS}s)")
+            else:
+                self.log(f"[TIMEOUT_CHECK] vehicle_id={track_id} ⏳ NOT ready yet - only {time_since_last_frame:.1f}s since last frame (need {VEHICLE_NOTIFICATION_TIMEOUT_SECONDS}s)")
+            
+            return is_ready
+
     def _on_plate_task_complete(self, track_id: int, vehicle_dir: str) -> None:
         """
         Callback called when a background plate detection task completes (executor task).
@@ -1148,19 +1283,29 @@ class PlateProcessor:
                         self.log(f"[TASK_COMPLETE] vehicle_id={track_id} ✓ All detection tasks done, ready to send notification now")
             
             # Send notification OUTSIDE the lock to avoid blocking other operations
-            # Only send if all tasks are complete (total_remaining == 0)
+            # Only send if:
+            #   1. All tasks are complete (total_remaining == 0)
+            #   2. Vehicle hasn't been seen for TIMEOUT_SECONDS (giving time for all frames to arrive)
             with self._task_count_lock:
                 remaining_executor_tasks = self.vehicle_pending_task_count.get(track_id, 0)
                 remaining_queue_tasks = self.vehicle_pending_queue_tasks.get(track_id, 0)
                 total_remaining = remaining_executor_tasks + remaining_queue_tasks
             
             if total_remaining == 0:
-                self.log(f"[TASK_COMPLETE] vehicle_id={track_id} ► Sending notification now (all tasks complete)...")
-                result = self.send_final_vehicle_notification(track_id, vehicle_dir=vehicle_dir)
-                if result:
-                    self.log(f"[TASK_COMPLETE] vehicle_id={track_id} ✓ Notification sent successfully")
+                # All tasks done, but check if vehicle has timed out (no new frames for 2 seconds)
+                # This ensures we don't send notification too early
+                if self._is_vehicle_ready_to_notify(track_id):
+                    self.log(f"[TASK_COMPLETE] vehicle_id={track_id} ► Sending notification now (all tasks complete + vehicle timeout)...")
+                    result = self.send_final_vehicle_notification(track_id, vehicle_dir=vehicle_dir)
+                    if result:
+                        self.log(f"[TASK_COMPLETE] vehicle_id={track_id} ✓ Notification sent successfully")
+                    else:
+                        self.log(f"[TASK_COMPLETE] vehicle_id={track_id} ⚠ Notification sending failed or skipped")
                 else:
-                    self.log(f"[TASK_COMPLETE] vehicle_id={track_id} ⚠ Notification sending failed or skipped")
+                    # Not timed out yet, don't send - wait for more frames or timeout to expire
+                    self.log(f"[TASK_COMPLETE] vehicle_id={track_id} ⏳ All tasks done but vehicle not timed out yet - waiting for more frames or timeout...")
+            else:
+                self.log(f"[TASK_COMPLETE] vehicle_id={track_id} Still have pending tasks ({total_remaining}), not ready to send notification")
                 
         except Exception as e:
             self.log(f"[TASK_COMPLETE] vehicle_id={track_id} ERROR in _on_plate_task_complete: {e}")
@@ -1309,6 +1454,10 @@ class PlateProcessor:
         
         self.log(f"[CLEANUP_NOTIFY] Starting cleanup notifications (fallback for remaining vehicles)...")
         
+        # First, check for any vehicles that have timed out and send their notifications
+        # This catches vehicles that completed all tasks but timeout expired without callback
+        self._check_and_notify_timed_out_vehicles()
+        
         # Get all vehicles that have ever been tracked
         # Get all vehicle IDs (thread-safe)
         all_vehicle_ids = self.get_all_vehicle_ids()
@@ -1366,11 +1515,11 @@ class PlateProcessor:
             with _uuid_mapping_lock:
                 vehicle_uuid = _track_id_to_uuid.get(track_id)
             
-            # Check if already sent (by UUID)
+            # Check if already sent WITH VALID PLATE (by UUID)
+            # Note: If sent WITHOUT plate (UNDETECTED), still allow sending with better plate found
             with _vehicle_telegram_sent_lock:
                 if vehicle_uuid:
-                    already_sent = (vehicle_uuid in _vehicle_telegram_sent_with_plate or 
-                                  vehicle_uuid in _vehicle_telegram_sent_without_plate)
+                    already_sent = vehicle_uuid in _vehicle_telegram_sent_with_plate
                 else:
                     # UUID not created yet means vehicle never went through plate processing
                     # So it definitely hasn't sent a notification yet
@@ -1446,11 +1595,7 @@ class PlateProcessor:
         # Get or create UUID for this vehicle (uniqueness across restarts)
         vehicle_uuid = self.get_or_create_uuid(track_id)
         
-        # Skip if already sent (check by UUID, not track_id)
-        with _vehicle_telegram_sent_lock:
-            if vehicle_uuid in _vehicle_telegram_sent_with_plate or vehicle_uuid in _vehicle_telegram_sent_without_plate:
-                self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) Already sent notification, skipping final notification")
-                return False
+        # NOTE: Removed notification status check - allow same vehicle to notify multiple times per day
         
         try:
             # Get vehicle state (thread-safe)
@@ -1458,16 +1603,22 @@ class PlateProcessor:
             if direction_label is None:
                 direction_label = "Unknown"
             
-            # Check if direction is entering (must contain "bottom")
-            is_entering = direction_label and "bottom" in direction_label.lower()
-            if not is_entering:
-                self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) Skipping final notification - vehicle is exiting or direction unknown (direction={direction_label})")
+            # Check if vehicle is EXITING (direction contains "top" = top, top-left, top-right)
+            # Allow notification for: "bottom", "bottom-left", "bottom-right", "Unknown"
+            # Skip only for: "top", "top-left", "top-right"
+            is_exiting = direction_label and "top" in direction_label.lower()
+            if is_exiting:
+                self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) Skipping notification - vehicle is EXITING (direction={direction_label})")
                 return False
             
+            # Get best detected plate for this vehicle
             plate_text = self.get_most_detected_plate(track_id)[0]  # Get the best plate detected for this vehicle
             
             # Skip if no valid plate was detected (None means no detections)
             is_valid_plate = plate_text and str(plate_text).strip().lower() != "unknown"
+            if not is_valid_plate:
+                self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) Skipping notification - no valid plate detected (direction={direction_label})")
+                return False
             
             # Set best plate in vehicle_plates if not already set (thread-safe)
             # Only store if we have a valid plate (skip None and "unknown")
@@ -1484,122 +1635,65 @@ class PlateProcessor:
                             self.vehicle_plate_counts[track_id][plate_text] = 1
                             self.log(f"[PLATE] vehicle_id={track_id} Added to plate_counts: {plate_text}")
             
-            
             notification_sent = False
             
-            # Case 1: Plate detected (only send if valid plate)
-            if is_valid_plate:
-                self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) Sending final notification WITH PLATE: plate={plate_text}")
-                
-                # Find best image matching the detected plate
-                image_path = None
-                
-                # First, try using the stored vehicle_detected_plate_images
-                if track_id in self.vehicle_detected_plate_images:
-                    stored_path = self.vehicle_detected_plate_images[track_id]
-                    if os.path.exists(stored_path) and os.path.getsize(stored_path) > 0:
-                        image_path = stored_path
-                        self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) Using stored image: {stored_path}")
-                    else:
-                        self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ⚠ Stored image not found or empty: {stored_path}")
-                
-                # If stored image not available, search vehicle_dir
-                if not image_path and vehicle_dir:
-                    image_path = self._get_best_vehicle_image_by_plate(vehicle_dir, plate_text, track_id)
-                    if not image_path:
-                        self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ⚠ No image found in {vehicle_dir}")
-                    else:
-                        self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ✓ Found image in directory: {image_path}")
-                else:
-                    if image_path:
-                        self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ✓ Using stored image path")
-                    else:
-                        self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ⚠ No vehicle_dir provided")
-                
-                # Send final notification with best plate (OUTSIDE of lock)
-                self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ► Calling Telegram API with image_path={image_path}...")
-                try:
-                    # === TIME BLOCK: TELEGRAM SEND ===
-                    # with time_block(f"[TELEGRAM_SEND] vehicle_id={track_id}", self.log):
-                    telegram_response = send_notify_to_telegram(
-                        plate_text,
-                        direction_label,
-                        frame_timestamp,
-                        image_path=image_path,
-                    )
-                    self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ✓ Telegram API call completed (success={telegram_response.get('ok', False)})")
-                except Exception as e:
-                    self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ✗ Telegram API error: {e}")
-                    telegram_response = {"ok": False, "error": str(e)}
-                
-                # Only mark as sent if Telegram API succeeded (check 'ok' field)
-                telegram_success = telegram_response.get("ok", False)
-                if telegram_success:
-                    # Now update tracking status inside lock (store UUID, not track_id)
-                    with _vehicle_telegram_sent_lock:
-                        _vehicle_telegram_sent_with_plate.add(vehicle_uuid)
-                    
-                    self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ✓ Final notification sent with plate={plate_text}")
-                    # Record successful notification in metrics
-                    self.metrics.record_notification_sent(success=True, api_call=True)
-                    notification_sent = True
-                else:
-                    self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ⚠ Telegram API failed, will retry later")
-                    # Record failed notification in metrics
-                    self.metrics.record_notification_sent(success=False, api_call=True)
-                    notification_sent = False
+            # Send notification with valid plate (and valid entering direction or unknown direction)
+            self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) Sending final notification WITH PLATE: plate={plate_text} (direction={direction_label})")
             
-            # Case 2: No valid plate detected (all tasks complete, but plate detection failed)
-            # Still send notification with "UNDETECTED" and first available image
-            if not is_valid_plate:
-                self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) Sending final notification WITHOUT PLATE (UNDETECTED)")
-                
-                # Get first available image from vehicle directory
-                image_path = None
-                if vehicle_dir:
-                    image_path = self._get_first_vehicle_frame_image(vehicle_dir, track_id)
-                    if image_path:
-                        self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ✓ Found first image: {image_path}")
-                    else:
-                        self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ⚠ No image found in {vehicle_dir}")
+            # Find best image matching the detected plate
+            image_path = None
+            
+            # First, try using the stored vehicle_detected_plate_images
+            if track_id in self.vehicle_detected_plate_images:
+                stored_path = self.vehicle_detected_plate_images[track_id]
+                if os.path.exists(stored_path) and os.path.getsize(stored_path) > 0:
+                    image_path = stored_path
+                    self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) Using stored image: {stored_path}")
                 else:
-                    self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ⚠ No vehicle_dir provided for undetected plate")
-                
-                # Use "UNDETECTED" as plate text for notification
-                undetected_plate_text = "UNDETECTED"
-                
-                # Send notification with "UNDETECTED" plate (OUTSIDE of lock)
-                self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ► Calling Telegram API with image_path={image_path}, plate_text=UNDETECTED...")
-                try:
-                    # === TIME BLOCK: TELEGRAM SEND ===
-                    # with time_block(f"[TELEGRAM_SEND] vehicle_id={track_id}", self.log):
-                    telegram_response = send_notify_to_telegram(
-                        undetected_plate_text,
-                        direction_label,
-                        frame_timestamp,
-                        image_path=image_path,
-                    )
-                    self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ✓ Telegram API call completed (success={telegram_response.get('ok', False)})")
-                except Exception as e:
-                    self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ✗ Telegram API error: {e}")
-                    telegram_response = {"ok": False, "error": str(e)}
-                
-                # Only mark as sent if Telegram API succeeded (check 'ok' field)
-                telegram_success = telegram_response.get("ok", False)
-                if telegram_success:
-                    # Now update tracking status inside lock (store UUID, not track_id)
-                    with _vehicle_telegram_sent_lock:
-                        _vehicle_telegram_sent_without_plate.add(vehicle_uuid)
-                    
-                    self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ✓ Final notification sent WITHOUT plate (UNDETECTED)")
-                    # Record successful notification in metrics
-                    self.metrics.record_notification_sent(success=True, api_call=True)
-                    notification_sent = True
+                    self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ⚠ Stored image not found or empty: {stored_path}")
+            
+            # If stored image not available, search vehicle_dir
+            if not image_path and vehicle_dir:
+                image_path = self._get_best_vehicle_image_by_plate(vehicle_dir, plate_text, track_id)
+                if not image_path:
+                    self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ⚠ No image found in {vehicle_dir}")
                 else:
-                    self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ⚠ Telegram API failed, will retry later")
-                    # Record failed notification in metrics
-                    self.metrics.record_notification_sent(success=False, api_call=True)
-                    notification_sent = False
+                    self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ✓ Found image in directory: {image_path}")
+            else:
+                if image_path:
+                    self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ✓ Using stored image path")
+                else:
+                    self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ⚠ No vehicle_dir provided")
+            
+            # Send final notification with best plate (OUTSIDE of lock)
+            self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ► Calling Telegram API with image_path={image_path}...")
+            try:
+                # === TIME BLOCK: TELEGRAM SEND ===
+                # with time_block(f"[TELEGRAM_SEND] vehicle_id={track_id}", self.log):
+                telegram_response = send_notify_to_telegram(
+                    plate_text,
+                    direction_label,
+                    frame_timestamp,
+                    image_path=image_path,
+                )
+                self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ✓ Telegram API call completed (success={telegram_response.get('ok', False)})")
+            except Exception as e:
+                self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ✗ Telegram API error: {e}")
+                telegram_response = {"ok": False, "error": str(e)}
+            
+            # Only mark as sent if Telegram API succeeded (check 'ok' field)
+            telegram_success = telegram_response.get("ok", False)
+            if telegram_success:
+                # NOTE: No longer tracking sent status - allow same vehicle to notify multiple times per day
+                self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ✓ Final notification sent with plate={plate_text}")
+                # Record successful notification in metrics
+                self.metrics.record_notification_sent(success=True, api_call=True)
+                notification_sent = True
+            else:
+                self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ⚠ Telegram API failed, will retry later")
+                # Record failed notification in metrics
+                self.metrics.record_notification_sent(success=False, api_call=True)
+                notification_sent = False
             
             if notification_sent:
                 # === TIME BLOCK: SAVE STATE ===

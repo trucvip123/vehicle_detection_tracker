@@ -5,7 +5,7 @@ import time
 import os
 import sys
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Callable, Optional, Tuple, Union
 from VehicleDetectionTracker.config_loader import get_rtsp_config
 from VehicleDetectionTracker.time_scheduler import (
@@ -145,15 +145,27 @@ class StreamHandler:
                         cap = None
                     last_outside_hours_log = now
 
-                # Calculate time to next end_time for notification
-                if end_time is not None:
-                    wait_seconds = (end_time - now).total_seconds()
-                    if wait_seconds > 0:
-                        time.sleep(
-                            min(wait_seconds, 1800)
-                        )  # sleep up to 30 min or until end_time
-                    else:
-                        time.sleep(30)
+                # Calculate time to NEXT START of operating hours (not end time!)
+                # When outside, we need to wait for NEXT START, not current END
+                from VehicleDetectionTracker.config_loader import get_config
+                config = get_config()
+                operating_hours_config = config.get("operating_hours", {})
+                start_hour = operating_hours_config.get("start_hour", 6)
+                end_hour = operating_hours_config.get("end_hour", 18)
+                
+                now = datetime.now()
+                start_time = now.replace(hour=start_hour, minute=0, second=0, microsecond=0)
+                
+                # If past start_time today, calculate to tomorrow's start_time
+                if now >= start_time:
+                    start_time = start_time + timedelta(days=1)
+                
+                wait_seconds = (start_time - now).total_seconds()
+                if wait_seconds > 0:
+                    # Cap sleep at 30 min to allow config updates
+                    sleep_time = min(wait_seconds, 1800)
+                    self.log(f"⏱ Chờ {sleep_time:.0f} giây để tới giờ bắt đầu ({start_time.strftime('%H:%M:%S')})...")
+                    time.sleep(sleep_time)
                 else:
                     time.sleep(30)
                 continue
