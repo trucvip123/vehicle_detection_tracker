@@ -40,12 +40,7 @@ logger = logging.getLogger(__name__)
 from gpu_pipeline_working import GPUPipelineSimple
 
 # Import VehicleDetectionTracker
-try:
-    from VehicleDetectionTracker.VehicleDetectionTracker import VehicleDetectionTracker
-    TRACKER_AVAILABLE = True
-except ImportError:
-    TRACKER_AVAILABLE = False
-    logger.warning("[WARNING] VehicleDetectionTracker not available")
+from VehicleDetectionTracker.VehicleDetectionTracker import VehicleDetectionTracker
 
 
 class IntegratedVehicleDetectionPipeline:
@@ -58,54 +53,12 @@ class IntegratedVehicleDetectionPipeline:
         Args:
             mode: 'gpu' (fast) or 'tracker' (full pipeline with all features)
         """
-        self.mode = mode
         self.logger = logger
         self.tracker = None
         self.pipeline = None
         
-        logger.info("\n" + "="*80)
-        logger.info("INTEGRATED VEHICLE DETECTION PIPELINE - INITIALIZATION")
-        logger.info("="*80)
-        logger.info(f"Mode: {mode.upper()}")
-        
-        if mode == 'gpu':
-            # GPU-accelerated mode (fastest)
-            logger.info("[INIT] Initializing GPU Pipeline (Fast Mode)")
-            self.pipeline = GPUPipelineSimple(
-                model_path="model/yolov8n.pt",
-                confidence=0.5,
-                use_gpu=True,
-                inference_resolution=(1280, 720)
-            )
-            logger.info("[INIT] OK GPU Pipeline loaded - Ready for fast inference")
-            
-        elif mode == 'tracker':
-            # Tracker mode (full features - vehicle tracking + telegram)
-            if not TRACKER_AVAILABLE:
-                logger.error("[INIT] ERROR: VehicleDetectionTracker not available - falling back to GPU mode")
-                self.mode = 'gpu'
-                self.pipeline = GPUPipelineSimple(
-                    model_path="model/yolov8n.pt",
-                    confidence=0.5,
-                    use_gpu=True,
-                    inference_resolution=(1280, 720)
-                )
-                logger.info("[INIT] OK GPU Pipeline loaded as fallback")
-            else:
-                logger.info("[INIT] Initializing VehicleDetectionTracker (Full Mode)")
-                self.tracker = VehicleDetectionTracker()
-                logger.info("[INIT] OK VehicleDetectionTracker loaded - Ready for full pipeline")
-        else:
-            logger.error(f"[INIT] ERROR: Unknown mode '{mode}' - falling back to GPU mode")
-            self.mode = 'gpu'
-            self.pipeline = GPUPipelineSimple(
-                model_path="model/yolov8n.pt",
-                confidence=0.5,
-                use_gpu=True,
-                inference_resolution=(1280, 720)
-            )
-            logger.info("[INIT] OK GPU Pipeline loaded as fallback")
-      
+        self.tracker = VehicleDetectionTracker()
+  
         self.stats = {
             'frames_processed': 0,
             'vehicles_detected': 0,
@@ -123,22 +76,14 @@ class IntegratedVehicleDetectionPipeline:
             video_source: Path to video file or RTSP URL
         """
         logger.info(f"\n{'='*80}")
-        logger.info(f"[STREAM] Starting {self.mode.upper()} Pipeline")
         logger.info(f"{'='*80}")
         logger.info(f"Source: {video_source}")
-        logger.info(f"Mode: {self.mode.upper()}")
         
         self.stats['start_time'] = os.times()
-        
-        if self.mode == 'gpu':
-            # GPU Pipeline: Fast inference with minimal overhead
-            logger.info("[PROCESSING] Using GPU-accelerated pipeline (RTSP optimized)")
-            return self._process_gpu_pipeline(video_source)
-        
-        elif self.mode == 'tracker':
-            # Tracker: Full pipeline with tracking + OCR + Telegram
-            logger.info("[PROCESSING] Using VehicleDetectionTracker (Full Features)")
-            return self._process_tracker_pipeline(video_source)
+   
+        # Tracker: Full pipeline with tracking + OCR + Telegram
+        logger.info("[PROCESSING] Using VehicleDetectionTracker (Full Features)")
+        return self._process_tracker_pipeline(video_source)
     
     def _process_gpu_pipeline(self, video_source):
         """Process with GPU pipeline (fastest)"""
@@ -229,34 +174,12 @@ class IntegratedVehicleDetectionPipeline:
             import traceback
             logger.error(traceback.format_exc())
             return None
-    
-    def process_local_video_test(self):
-        """Quick test with local video"""
-        
-        logger.info("\n[TEST] Quick test with local video")
-        
-        test_videos = ["video/h.mp4", "video/n.mp4", "test.mp4"]
-        test_video = None
-        
-        for video in test_videos:
-            if os.path.exists(video):
-                test_video = video
-                break
-        
-        if not test_video:
-            logger.warning("[WARNING] No test video found")
-            return None
-        
-        logger.info(f"[TEST] Using: {test_video}")
-        
-        return self.process_video(test_video)
-    
+
     def print_summary(self):
         """Print final summary"""
         logger.info(f"\n{'='*80}")
         logger.info(f"[FINAL SUMMARY] Complete Pipeline Statistics")
         logger.info(f"{'='*80}")
-        logger.info(f"Mode: {self.mode.upper()}")
         logger.info(f"Frames Processed: {self.stats['frames_processed']}")
         logger.info(f"Vehicles Detected: {self.stats['vehicles_detected']}")
         logger.info(f"Plates Recognized: {self.stats['plates_recognized']}")
@@ -273,43 +196,11 @@ def main():
     
     # Configuration  
     RTSP_URL = "rtsp://admin:MOVYKV@aicamera.dienthanhliem.com:554/Streaming/Channels/101"
-    # RTSP_URL = "video/1705.mp4"  # For testing with local video, comment out for RTSP
+    # RTSP_URL = "video/0604.mp4"  # For testing with local video, comment out for RTSP
 
-    # Mode selection
-    mode = 'gpu'  # Default: fast GPU pipeline
-    if len(sys.argv) > 1:
-        arg = sys.argv[1].lower()
-        if arg in ['gpu', 'tracker', 'test']:
-            mode = arg
-    
-    logger.info(f"\nSelected Mode: {mode.upper()}")
-    logger.info("Options:")
-    logger.info("  gpu      - Fast GPU-accelerated RTSP streaming (default)")
-    logger.info("  tracker  - Full pipeline: Vehicle + Plate + OCR + Telegram")
-    logger.info("  test     - Test with local video\n")
-    
-    # Handle test mode separately
-    if mode == 'test':
-        logger.info("\n[MODE] Test Mode - Local Video Verification")
-        try:
-            pipeline = IntegratedVehicleDetectionPipeline(mode='gpu')
-            stats = pipeline.process_local_video_test()
-            pipeline.print_summary()
-            if stats:
-                logger.info("[SUCCESS] Test completed successfully")
-                sys.exit(0)
-            else:
-                logger.error("[ERROR] Test failed")
-                sys.exit(1)
-        except Exception as e:
-            logger.error(f"[ERROR] Failed to run test: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
-            sys.exit(1)
-    
     # Initialize integrated pipeline for gpu/tracker modes
     try:
-        pipeline = IntegratedVehicleDetectionPipeline(mode=mode)
+        pipeline = IntegratedVehicleDetectionPipeline()
     except Exception as e:
         logger.error(f"[ERROR] Failed to initialize pipeline: {e}")
         sys.exit(1)
@@ -317,7 +208,6 @@ def main():
     # Run production mode RTSP stream
     try:
         # Production mode: Process RTSP stream
-        logger.info(f"\n[MODE] Production Mode - {mode.upper()} Pipeline")
         stats = pipeline.process_video(RTSP_URL)
         sys.exit(0)
     except Exception as e:

@@ -2,24 +2,17 @@
 
 import math
 import os
-import glob
 import time
 import cv2
 from datetime import datetime
 from collections import defaultdict
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict
 import numpy as np
 from VehicleDetectionTracker.config_loader import (
     get_detection_config,
     get_tracking_config,
 )
 from VehicleDetectionTracker.tracking_utils import map_direction_to_label
-from VehicleDetectionTracker.frame_quality import (
-    should_process_frame,
-    get_frame_quality_summary,
-)
-from VehicleDetectionTracker.metrics import get_metrics_collector
-from VehicleDetectionTracker.performance_timing import time_block
 
 
 class FrameProcessor:
@@ -29,7 +22,6 @@ class FrameProcessor:
         self.model = model
         self.log = log_func
         self.gpu_optimizer = gpu_optimizer  # GPU optimization module
-        self.metrics = get_metrics_collector()  # Get metrics collector instance
 
         # Tracking data
         self.track_history = defaultdict(lambda: [])
@@ -143,6 +135,19 @@ class FrameProcessor:
             self.log(f"[TRACKER_RESET] ⚠ Warning during tracker reset: {type(e).__name__}: {e}\n{error_trace}")
             # Non-critical error - system will continue with tracking
 
+    def set_next_track_id(self, next_id: int) -> None:
+        """
+        Set the persistent track ID counter to continue from a given value.
+        Called on system restart within the same day to avoid ID conflicts with
+        vehicles already recorded in today's state file.
+
+        Args:
+            next_id: The value to start assigning from (should be max_existing_id + 1)
+        """
+        if next_id > self._next_track_id:
+            self.log(f"[PERSIST_ID] Resuming track ID counter from {next_id} (was {self._next_track_id})")
+            self._next_track_id = next_id
+
     def get_persistent_track_id(self, bytetrack_id: int, current_time: datetime = None) -> int:
         """
         Map ByteTrack ID to a persistent, non-reusable track ID.
@@ -171,7 +176,6 @@ class FrameProcessor:
     def process_frame_streaming(self, frame: np.ndarray, frame_timestamp: datetime, plate_processor: Any) -> np.ndarray:
         """
         Optimized frame processing for streaming: Fast detection, background OCR.
-        Only shows license plates in corner, no bounding boxes on vehicles.
 
         Args:
             frame (numpy.ndarray): Input frame for processing.
@@ -181,7 +185,8 @@ class FrameProcessor:
         Returns:
             numpy.ndarray: Frame with license plates displayed in corner.
         """
-        frame_start_time = datetime.now()  # Start timing frame processing
+        # self.log(f"[FRAME] Received frame for processing at {frame_timestamp.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]}, shape={frame.shape if frame is not None else 'None'}") 
+
         frame_processing_time_start = time.time()  # For metrics
         
         # Check and reset daily tracking at start of each day
@@ -229,6 +234,8 @@ class FrameProcessor:
                 else [None] * len(track_ids)
             )
             current_track_ids = set(track_ids)
+
+            self.log(f"[TRACK] Detected vehicle IDs: {sorted(list(current_track_ids))}")
 
             # === DETECT BYTETRACK REUSE AND CLEAR OLD MAPPINGS ===
             # ByteTrack reuses IDs when vehicles disappear for > 300 seconds.
@@ -442,47 +449,8 @@ class FrameProcessor:
                     f"[FRAME] Frame processing completed. Active vehicles: {sorted(list(current_track_ids))}"
                 )
             self._prev_active_vehicle_ids = current_track_ids.copy()
+
         
-        # ===== RECORD METRICS =====
-        frame_total_time = time.time() - frame_processing_time_start
-        
-        # Record frame processing metrics
-        self.metrics.record_frame_processed(
-            frame_total_time,
-            is_quality_rejected=False,
-            issues=[]
-        )
-        
-        # Record detection metrics
-        vehicles_count = len(current_track_ids)
-        # Calculate average detection confidence if we have results
-        avg_confidence = 0.0
-        if (
-            results is not None
-            and results[0] is not None
-            and hasattr(results[0].boxes, "conf")
-            and results[0].boxes.conf is not None
-        ):
-            confidences = results[0].boxes.conf.cpu().numpy()
-            if len(confidences) > 0:
-                avg_confidence = float(confidences.mean())
-        
-        self.metrics.record_detection(
-            confidence=avg_confidence,
-            vehicles_detected_count=vehicles_count,
-            processing_time=frame_total_time
-        )
-        
-        # Record tracking metrics
-        self.metrics.record_tracking_update(
-            active_vehicles=len(current_track_ids),
-            new_vehicle=False,  # Updated per-vehicle in loop above
-            tracking_lost=False,
-            reassigned=False
-        )
-        
-        # return frame
-    
     def _cleanup_old_vehicle_data(self, current_timestamp: datetime, plate_processor: Any) -> None:
         """
         Periodically clean up old vehicle data from memory to prevent memory leaks.

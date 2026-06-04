@@ -26,8 +26,6 @@ from VehicleDetectionTracker.vehicle_summary import (
     levenshtein_distance,
     merge_similar_plates,
 )
-from VehicleDetectionTracker.metrics import get_metrics_collector
-
 
 # Global sets to track vehicle notifications using UUIDs (not track_ids)
 _vehicle_telegram_sent_with_plate = set()  # Vehicle UUIDs that sent notification with plate
@@ -81,7 +79,6 @@ class PlateProcessor:
         self.executor = executor
         self.log = log_func
         self.frame_processor = frame_processor  # For calling tracker reset at daily reset
-        self.metrics = get_metrics_collector()  # Get metrics collector instance
         
         # Load detection config for batch processing
         from VehicleDetectionTracker.config_loader import get_plate_detection_config
@@ -1751,19 +1748,17 @@ class PlateProcessor:
                         valid_track_ids.add(track_id)
                     self.log(f"[PERSIST] Restored vehicle_plates: {len(valid_track_ids)} vehicles")
 
-                # Restore vehicle_plate_counts
+                # Restore vehicle_plate_counts for all tracked IDs, even if no confirmed plate exists yet
                 if "vehicle_plate_counts" in state:
                     for track_id_str, plate_counts in state["vehicle_plate_counts"].items():
                         track_id = int(track_id_str)
-                        if track_id in valid_track_ids:
-                            self.vehicle_plate_counts[track_id] = plate_counts
-
-                # Restore vehicle_directions
+                        self.vehicle_plate_counts[track_id] = plate_counts
+                
+                # Restore vehicle_directions for vehicles with known directions
                 if "vehicle_directions" in state:
                     for track_id_str, direction in state["vehicle_directions"].items():
                         track_id = int(track_id_str)
-                        if track_id in valid_track_ids:
-                            self.vehicle_directions[track_id] = direction
+                        self.vehicle_directions[track_id] = direction
                     self.log(f"[PERSIST] Restored vehicle_directions: {len(self.vehicle_directions)} vehicles")
                 else:
                     # BACKWARD COMPATIBILITY: Old state files don't have vehicle_directions
@@ -1798,11 +1793,20 @@ class PlateProcessor:
                             track_id = int(track_id_str)
                             _track_id_to_uuid[track_id] = uuid_str
                     self.log(f"[PERSIST] Restored UUID mapping for {len(state['track_id_to_uuid'])} vehicles (for consistency)")
-                    self.log(f"[PERSIST] ℹ Notification status NOT restored - fresh restart, vehicles can send alerts")
-                    
-                    # Note: We explicitly do NOT restore sent_with_plate or sent_without_plate
-                    # This allows new notifications on system restart (desired behavior)
-                    # UUID mapping alone ensures consistency without blocking new detections
+
+                    # Restore notification sent status if present
+                    if "sent_with_plate" in state or "sent_without_plate" in state:
+                        with _vehicle_telegram_sent_lock:
+                            if "sent_with_plate" in state:
+                                for uuid_str in state["sent_with_plate"]:
+                                    _vehicle_telegram_sent_with_plate.add(uuid_str)
+                                self.log(f"[PERSIST] Restored sent_with_plate for {len(state.get('sent_with_plate', []))} vehicles")
+                            if "sent_without_plate" in state:
+                                for uuid_str in state["sent_without_plate"]:
+                                    _vehicle_telegram_sent_without_plate.add(uuid_str)
+                                self.log(f"[PERSIST] Restored sent_without_plate for {len(state.get('sent_without_plate', []))} vehicles")
+                    else:
+                        self.log(f"[PERSIST] ℹ Notification status lists not found in state file; starting fresh")
                 else:
                     # BACKWARD COMPATIBILITY: Old state file without UUID mapping
                     # Generate UUID for each vehicle loaded from state
@@ -1824,6 +1828,32 @@ class PlateProcessor:
                 )
         except Exception as e:
             self.log(f"[PERSIST] Failed to load state: {e}")
+
+    def sync_track_id_counter(self) -> None:
+        """
+        Sync frame_processor's track ID counter to continue from the highest
+        track ID already recorded in today's state file.
+
+        Call this AFTER frame_processor is linked, so restarts within the same day
+        don't reuse IDs that belong to vehicles already in the state.
+        """
+        if self.frame_processor is None:
+            return
+
+        # Collect all numeric track IDs from today's loaded state
+        all_ids = []
+        for k in list(self.vehicle_plates.keys()) + list(self.vehicle_plate_counts.keys()):
+            try:
+                all_ids.append(int(k))
+            except (ValueError, TypeError):
+                pass  # skip versioned IDs like "5_v2"
+
+        if all_ids:
+            next_id = max(all_ids) + 1
+            self.frame_processor.set_next_track_id(next_id)
+            self.log(f"[PERSIST] ✓ Track ID counter resumed from {next_id} (max existing ID={max(all_ids)})")
+        else:
+            self.log(f"[PERSIST] No existing track IDs found — starting track ID counter from 1")
 
     def check_and_reset_daily_tracking(self) -> None:
         """Check if it's a new day and reset tracking data if needed (thread-safe)."""
@@ -1860,15 +1890,6 @@ class PlateProcessor:
                     import traceback
                     error_trace = traceback.format_exc()
                     self.log(f"[DAILY_RESET] ✗ ERROR during reset: {type(e).__name__}: {e}\n{error_trace}")
-
-    def get_metrics(self) -> 'MetricsCollector':
-        """
-        Get metrics collector instance for accessing metrics.
-
-        Returns:
-            MetricsCollector: Current metrics collector instance
-        """
-        return self.metrics
 
     def _save_state(self) -> None:
         """Save vehicle state to JSON file for persistence (one file per day)."""

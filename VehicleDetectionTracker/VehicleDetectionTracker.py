@@ -30,14 +30,10 @@ from VehicleDetectionTracker.config_loader import (
 
 from VehicleDetectionTracker.device_utils import get_device
 from VehicleDetectionTracker.logging_utils import log
-from VehicleDetectionTracker.excel_utils import ExcelManager
 from VehicleDetectionTracker.plate_processor import PlateProcessor, reset_telegram_sent
 from VehicleDetectionTracker.frame_processor import FrameProcessor
 from VehicleDetectionTracker.stream_handler import StreamHandler
-from VehicleDetectionTracker.image_utils_helper import draw_plate_text_corner
-from VehicleDetectionTracker.metrics import get_metrics_collector
-from VehicleDetectionTracker.performance_timing import time_block
-from VehicleDetectionTracker.gpu_optimizer import GPUOptimizer, PerformanceMonitor, OptimizedTracking
+from VehicleDetectionTracker.gpu_optimizer import GPUOptimizer, PerformanceMonitor
 
 logging.getLogger("ultralytics").setLevel(logging.WARNING)
 logging.getLogger("paddleocr").setLevel(logging.WARNING)
@@ -135,11 +131,11 @@ class VehicleDetectionTracker:
         # Link frame_processor to plate_processor for tracker reset on daily reset
         self.plate_processor.frame_processor = self.frame_processor
         
+        # Resume track ID counter from today's state so a restart within the same day
+        # does not reuse IDs that already belong to recorded vehicles.
+        self.plate_processor.sync_track_id_counter()
+        
         self.stream_handler = StreamHandler(log, self.plate_processor)
-
-        # Initialize metrics collector
-        self.metrics = get_metrics_collector()
-        log("✓ Metrics collector initialized")
 
         # Now initialize OCR reader if needed
         if initialize_all_models:
@@ -343,34 +339,4 @@ class VehicleDetectionTracker:
         print("[CLEANUP] ✓✓ CLEANUP COMPLETE - Now exiting...", flush=True)
         sys.stdout.flush()
 
-    def get_metrics(self):
-        """
-        Get current metrics from the tracker.
-
-        Returns:
-            dict: All current metrics organized by category
-        """
-        return self.metrics.get_all_metrics()
-
-    def get_metrics_summary(self) -> str:
-        """
-        Get human-readable metrics summary.
-
-        Returns:
-            str: Formatted metrics summary report
-        """
-        return self.metrics.generate_summary_report()
-
-    def reset_metrics(self):
-        """Reset all metrics to initial state."""
-        self.metrics.reset_metrics()
-        log("[METRICS] All metrics reset")
-
-    def export_metrics_json(self):
-        """Export metrics as JSON-serializable dictionary."""
-        return self.metrics.export_metrics_json()
-
-    def get_trending_data(self):
-        """Get historical trending data for visualization."""
-        return self.metrics.get_trending_data()
 

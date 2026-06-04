@@ -1,7 +1,7 @@
 """Quick verification of vehicle_plate_counts fix."""
 import json
 
-with open('vehicle_state/vehicle_state_20260317.json', 'r') as f:
+with open('vehicle_state/vehicle_state_20260604.json', 'r') as f:
     state = json.load(f)
 
 print('✅ Vehicle State Summary')

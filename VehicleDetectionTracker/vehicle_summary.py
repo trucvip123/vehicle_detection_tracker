@@ -87,7 +87,7 @@ def normalize_plate_parts(plate: str) -> Optional[Dict[str, str]]:
 
 
 def merge_similar_plates(plate_summary: Dict[str, int], log_func: Optional[Callable[[str], None]] = None) -> Dict[str, int]:
-    THRESHOLD = 2  # Merge plates that differ by up to 2 characters
+    THRESHOLD = 1  # Merge plates that differ by up to 1 character
     plates = list(plate_summary.keys())
     
     if not plates:
