@@ -1738,8 +1738,10 @@ class PlateProcessor:
                 with open(state_file, "r", encoding="utf-8") as f:
                     state = json.load(f)
 
-                # Load vehicle_plates (primary data source for valid track_ids)
-                # Note: vehicle_directions and vehicle_last_seen are NOT persisted, only used in-memory during session
+                # Load vehicle_plates and vehicle_plate_counts from state.
+                # A vehicle may have plate_counts without a current vehicle_plate entry because
+                # its ByteTrack ID was cleared after reuse. We still want those vehicles to be
+                # restored for daily summaries and state continuity.
                 valid_track_ids = set()
                 if "vehicle_plates" in state:
                     for track_id_str, plate_text in state["vehicle_plates"].items():
@@ -1753,12 +1755,18 @@ class PlateProcessor:
                     for track_id_str, plate_counts in state["vehicle_plate_counts"].items():
                         track_id = int(track_id_str)
                         self.vehicle_plate_counts[track_id] = plate_counts
+                        valid_track_ids.add(track_id)
+                    self.log(f"[PERSIST] Restored vehicle_plate_counts: {len(self.vehicle_plate_counts)} vehicles")
                 
                 # Restore vehicle_directions for vehicles with known directions
                 if "vehicle_directions" in state:
                     for track_id_str, direction in state["vehicle_directions"].items():
                         track_id = int(track_id_str)
                         self.vehicle_directions[track_id] = direction
+                    # Ensure count-only vehicles without an explicit persisted direction are still treated as entries
+                    for track_id in valid_track_ids:
+                        if track_id not in self.vehicle_directions:
+                            self.vehicle_directions[track_id] = "bottom"
                     self.log(f"[PERSIST] Restored vehicle_directions: {len(self.vehicle_directions)} vehicles")
                 else:
                     # BACKWARD COMPATIBILITY: Old state files don't have vehicle_directions
