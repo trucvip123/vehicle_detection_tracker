@@ -12,12 +12,10 @@ from typing import Dict, Set, Optional, Tuple, Callable, Any, List
 from difflib import SequenceMatcher
 
 from VehicleDetectionTracker.plate_utils import (
-    detect_license_plate_sync,
     submit_plate_detection_async,
     initialize_inference_queue,
     batch_detect_license_plates,
     initialize_batch_accumulator,
-    get_batch_accumulator,
 )
 from VehicleDetectionTracker.utils.send_bot import send_notify_to_telegram
 from VehicleDetectionTracker.logging_utils import log_plate
@@ -774,15 +772,6 @@ class PlateProcessor:
                         self.vehicle_plate_counts_each_frame[effective_track_id][plate_text] = 0
                     self.vehicle_plate_counts_each_frame[effective_track_id][plate_text] += 1
                     
-                    # Record plate detection in metrics
-                    plate_detection_time = time_module.time() - plate_detection_start
-                    self.metrics.record_plate_detection(
-                        confidence=float(confidence),
-                        processing_time=plate_detection_time,
-                        ocr_attempted=True,
-                        ocr_success=(plate_text is not None and plate_text != "unknown")
-                    )
-                    
                     # Just accumulate the plate detection for summary purposes
                     plate_counts = self.vehicle_plate_counts_each_frame[effective_track_id]
                     log_plate(effective_track_id, f"Accumulated plate detection: plate={plate_text}, plate_counts={plate_counts}")
@@ -871,8 +860,6 @@ class PlateProcessor:
                         self.vehicle_pending_queue_tasks.pop(track_id, None)
                         self.vehicle_pending_task_count.pop(track_id, None)
                         self.log(f"[PLATE_QUEUE] vehicle_id={track_id} Cleaned up all pending task counts")
-
-
 
     def submit_plate_processing(
         self,
@@ -1683,13 +1670,9 @@ class PlateProcessor:
             if telegram_success:
                 # NOTE: No longer tracking sent status - allow same vehicle to notify multiple times per day
                 self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ✓ Final notification sent with plate={plate_text}")
-                # Record successful notification in metrics
-                self.metrics.record_notification_sent(success=True, api_call=True)
                 notification_sent = True
             else:
                 self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ⚠ Telegram API failed, will retry later")
-                # Record failed notification in metrics
-                self.metrics.record_notification_sent(success=False, api_call=True)
                 notification_sent = False
             
             if notification_sent:
@@ -1699,19 +1682,13 @@ class PlateProcessor:
                 self._save_state()
                 self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ✓ State saved")
                 return True
-            else:
-                # Record failed notification attempt if no plate was sent
-                if not notification_sent:
-                    self.metrics.record_notification_sent(success=False, api_call=True)
-            
+          
             return False
                     
         except Exception as e:
             self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} Error sending final notification: {e}")
             import traceback
             self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} Traceback: {traceback.format_exc()}")
-            # Record error in notification metrics
-            self.metrics.record_notification_sent(success=False, api_call=False)
             return False
 
     def _get_state_file_path(self, date_str: Optional[str] = None) -> str:

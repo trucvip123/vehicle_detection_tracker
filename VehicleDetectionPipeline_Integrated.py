@@ -36,9 +36,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Import GPU pipeline
-from gpu_pipeline_working import GPUPipelineSimple
-
 # Import VehicleDetectionTracker
 from VehicleDetectionTracker.VehicleDetectionTracker import VehicleDetectionTracker
 
@@ -51,7 +48,6 @@ class IntegratedVehicleDetectionPipeline:
         Initialize pipeline
         
         Args:
-            mode: 'gpu' (fast) or 'tracker' (full pipeline with all features)
         """
         self.logger = logger
         self.tracker = None
@@ -84,51 +80,6 @@ class IntegratedVehicleDetectionPipeline:
         # Tracker: Full pipeline with tracking + OCR + Telegram
         logger.info("[PROCESSING] Using VehicleDetectionTracker (Full Features)")
         return self._process_tracker_pipeline(video_source)
-    
-    def _process_gpu_pipeline(self, video_source):
-        """Process with GPU pipeline (fastest)"""
-        
-        logger.info("[GPU]  Resolution downscaling: 2880x1620 > 1280x720")
-        logger.info("[GPU]  Inference resolution: 1280x720")
-        logger.info("[GPU]  Expected FPS: 15-20 on RTSP")
-        logger.info("[GPU]  Press 'q' to stop")
-        
-        # Safety check: ensure pipeline is initialized
-        if self.pipeline is None:
-            logger.error("[ERROR] GPU Pipeline is not initialized!")
-            return None
-        
-        try:
-            stats = self.pipeline.process_stream_file(
-                video_path=video_source,
-                display=True,
-                inference_resolution=(1280, 720)
-            )
-            
-            if stats:
-                logger.info(f"\n{'='*80}")
-                logger.info(f"[GPU RESULTS] Pipeline Complete")
-                logger.info(f"{'='*80}")
-                logger.info(f"Frames Processed: {stats['frames']}")
-                logger.info(f"Average FPS: {stats['fps']:.2f}")
-                logger.info(f"Inference Time: {stats['inference_time_ms']:.2f}ms per frame")
-                logger.info(f"Total Processing Time: {stats['time']:.2f}s")
-                
-                if stats['fps'] >= 15:
-                    logger.info("OK Performance: EXCELLENT (>15 FPS)")
-                elif stats['fps'] >= 10:
-                    logger.info("OK Performance: GOOD (>10 FPS)")
-                else:
-                    logger.warning("!! Performance: Check network")
-                
-                self.stats['frames_processed'] = stats['frames']
-                return stats
-        
-        except Exception as e:
-            logger.error(f"[ERROR] GPU pipeline failed: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
-            return None
     
     def _process_tracker_pipeline(self, video_source):
         """Process with VehicleDetectionTracker (full features)"""
@@ -189,11 +140,6 @@ class IntegratedVehicleDetectionPipeline:
 
 def main():
     """Main entry point"""
-    
-    logger.info("\n" + "="*80)
-    logger.info("INTEGRATED VEHICLE DETECTION PIPELINE - PRODUCTION")
-    logger.info("="*80)
-    
     # Configuration  
     RTSP_URL = "rtsp://admin:MOVYKV@aicamera.dienthanhliem.com:554/Streaming/Channels/101"
     # RTSP_URL = "video/0604.mp4"  # For testing with local video, comment out for RTSP
