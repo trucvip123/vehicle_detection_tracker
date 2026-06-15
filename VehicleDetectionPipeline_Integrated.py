@@ -26,11 +26,12 @@ warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 # Setup logging
+Path("logs").mkdir(exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
     format='[%(asctime)s] %(levelname)s: %(message)s',
     handlers=[
-        logging.FileHandler(f"logs/vehicle_detection_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"),
+        logging.FileHandler(f"logs/{datetime.now().strftime('%Y-%m-%d')}.log"),
         logging.StreamHandler()
     ]
 )
@@ -141,7 +142,7 @@ class IntegratedVehicleDetectionPipeline:
 def main():
     """Main entry point"""
     # Configuration  
-    RTSP_URL = "rtsp://admin:MOVYKV@aicamera.dienthanhliem.com:554/Streaming/Channels/101"
+    RTSP_URL = "rtsp://admin:MOVYKV@aicamera.servemp3.com:554/Streaming/Channels/101"
     # RTSP_URL = "video/0604.mp4"  # For testing with local video, comment out for RTSP
 
     # Initialize integrated pipeline for gpu/tracker modes

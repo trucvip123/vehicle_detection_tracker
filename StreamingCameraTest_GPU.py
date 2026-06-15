@@ -41,11 +41,12 @@ except ImportError:
 
 
 # Setup logging
+Path("logs").mkdir(exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
     format='[%(asctime)s] %(levelname)s: %(message)s',
     handlers=[
-        logging.FileHandler(f"logs/streaming_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"),
+        logging.FileHandler(f"logs/{datetime.now().strftime('%Y-%m-%d')}.log"),
         logging.StreamHandler()
     ]
 )

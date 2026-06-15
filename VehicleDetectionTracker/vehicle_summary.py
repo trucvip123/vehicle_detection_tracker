@@ -161,15 +161,26 @@ def get_today_vehicles_summary(vehicle_last_seen: Dict[int, datetime], vehicle_d
     try:
         today_str = datetime.now().strftime("%Y%m%d")
         
-        # Get vehicles that entered today (direction contains "bottom")
-        vehicles_today = [
-            tid
-            for tid, ts in vehicle_last_seen.items()
-            if hasattr(ts, "strftime")
-            and ts.strftime("%Y%m%d") == today_str
-            and "bottom" in vehicle_directions.get(tid, "").lower()
-        ]
-        
+        # If vehicle_last_seen is available, use it to filter only today's vehicles.
+        if vehicle_last_seen:
+            vehicles_today = [
+                tid
+                for tid, ts in vehicle_last_seen.items()
+                if hasattr(ts, "strftime")
+                and ts.strftime("%Y%m%d") == today_str
+                and "bottom" in vehicle_directions.get(tid, "").lower()
+            ]
+        else:
+            # When reconstructing from a saved state file, all vehicles in the state
+            # are assumed to belong to that day and be valid if direction indicates entry.
+            if log_func:
+                log_func("[SUMMARY] vehicle_last_seen missing/empty: assuming all bottom-direction vehicles are today")
+            vehicles_today = [
+                tid
+                for tid, direction in vehicle_directions.items()
+                if "bottom" in direction.lower()
+            ]
+
         # Build plate summary
         plate_summary = {}
         for track_id in vehicles_today:
@@ -227,20 +238,31 @@ def save_daily_vehicle_summary(
     log_func(f"[DEBUG] vehicle_directions: {vehicle_directions}")
     for tid, direction in vehicle_directions.items():
         log_func(f"[SUMMARY] vehicle_id={tid} direction={direction}")
-    for tid, ts in vehicle_last_seen.items():
-        date_match = (
-            ts.strftime("%Y%m%d") == date_str if hasattr(ts, "strftime") else False
-        )
-        log_func(f"[SUMMARY] vehicle_id={tid} last_seen={ts} today={date_match}")
-    
+
+    if vehicle_last_seen:
+        for tid, ts in vehicle_last_seen.items():
+            date_match = (
+                ts.strftime("%Y%m%d") == date_str if hasattr(ts, "strftime") else False
+            )
+            log_func(f"[SUMMARY] vehicle_id={tid} last_seen={ts} today={date_match}")
+    else:
+        log_func("[SUMMARY] vehicle_last_seen missing/empty: assuming all bottom-direction vehicles are today")
+
     # Only count vehicles with direction_label indicating entry (e.g., 'bottom')
-    vehicles_today = [
-        tid
-        for tid, ts in vehicle_last_seen.items()
-        if hasattr(ts, "strftime")
-        and ts.strftime("%Y%m%d") == date_str
-        and "bottom" in vehicle_directions.get(tid, "").lower()
-    ]
+    if vehicle_last_seen:
+        vehicles_today = [
+            tid
+            for tid, ts in vehicle_last_seen.items()
+            if hasattr(ts, "strftime")
+            and ts.strftime("%Y%m%d") == date_str
+            and "bottom" in vehicle_directions.get(tid, "").lower()
+        ]
+    else:
+        vehicles_today = [
+            tid
+            for tid, direction in vehicle_directions.items()
+            if "bottom" in direction.lower()
+        ]
     log_func(f"[DEBUG] vehicles_today: {vehicles_today}")
     
     try:

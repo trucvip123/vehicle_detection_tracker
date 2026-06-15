@@ -1,4 +1,3 @@
-import asyncio
 import cv2
 import numpy as np
 import torch
@@ -7,9 +6,7 @@ from pathlib import Path
 from ultralytics import YOLO
 import threading
 import queue
-from concurrent.futures import ThreadPoolExecutor
-
-from VehicleDetectionTracker.function import utils_rotate, helper
+from VehicleDetectionTracker.logging_utils import log as shared_log
 
 
 # ============================================================================
@@ -352,21 +349,7 @@ def _ensure_log_dir():
 
 def _log(message):
     """Print log message with datetime timestamp and save to file."""
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    log_message = f"[{timestamp}] {message}"
-
-    # Print to console
-    print(log_message)
-
-    # Write to file
-    try:
-        log_dir = _ensure_log_dir()
-        log_file = log_dir / f"plate_{datetime.now().strftime('%Y-%m-%d')}.log"
-        with open(log_file, "a", encoding="utf-8") as f:
-            f.write(log_message + "\n")
-    except Exception as e:
-        # Don't fail if logging fails, just print error
-        print(f"Error writing to log file: {e}")
+    shared_log(message)
 
 
 def initialize_plate_detector(model_path="model/LP_detector.pt", device=None):

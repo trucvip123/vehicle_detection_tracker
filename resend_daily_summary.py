@@ -34,17 +34,6 @@ def main():
 
     log(f"[INFO] Loaded state from: {state_file}")
 
-    # Reconstruct vehicle_last_seen — all vehicles in state are from that date,
-    # use state timestamp so the date filter (YYYYMMDD == date_str) matches.
-    ts_raw = state.get("timestamp")
-    if ts_raw:
-        try:
-            state_ts = datetime.fromisoformat(ts_raw)
-        except Exception:
-            state_ts = datetime.strptime(date_str, "%Y%m%d")
-    else:
-        state_ts = datetime.strptime(date_str, "%Y%m%d")
-
     vehicle_directions: dict = {
         int(k): v for k, v in state.get("vehicle_directions", {}).items()
     }
@@ -55,10 +44,11 @@ def main():
         int(k): v for k, v in state.get("vehicle_plate_counts", {}).items()
     }
 
-    # All vehicles in the state file belong to date_str — set last_seen to state timestamp
-    all_track_ids = set(vehicle_directions.keys()) | set(vehicle_plates.keys())
-    vehicle_last_seen: dict = {tid: state_ts for tid in all_track_ids}
+    # When loading from saved state, all vehicles in the state file are assumed valid.
+    # No need to reconstruct vehicle_last_seen per track.
+    vehicle_last_seen: dict = {}
 
+    all_track_ids = set(vehicle_directions.keys()) | set(vehicle_plates.keys())
     log(f"[INFO] Vehicles in state: {sorted(all_track_ids)}")
     log(f"[INFO] vehicle_directions: {vehicle_directions}")
     log(f"[INFO] vehicle_plates: {vehicle_plates}")
