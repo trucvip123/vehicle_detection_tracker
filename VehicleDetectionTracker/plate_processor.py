@@ -1879,34 +1879,28 @@ class PlateProcessor:
     def _save_state(self) -> None:
         """Save vehicle state to JSON file for persistence (one file per day)."""
         try:
-            # self.log(f"[PERSIST] _save_state: Attempting to acquire lock...")
             with self._state_lock:
-                # self.log(f"[PERSIST] _save_state: Lock acquired")
                 state_file = self._get_state_file_path()
-                # self.log(f"[PERSIST] _save_state: state_file={state_file}")
                 
                 # Convert all data to JSON-serializable format
                 # No need to filter - data already contains only today's vehicles (reset at day start)
-                # self.log(f"[PERSIST] _save_state: Converting vehicle_plates...")
                 today_plates = {
                     str(tid): plate
                     for tid, plate in self.vehicle_plates.items()
                 }
-                # self.log(f"[PERSIST] _save_state: Converted plates: {len(today_plates)}")
-                
-                # self.log(f"[PERSIST] _save_state: Converting vehicle_plate_counts...")
+                # Expand today_plates from vehicle_plate_counts for vehicles not yet in vehicle_plates
+                for tid, counts in self.vehicle_plate_counts.items():
+                    if str(tid) not in today_plates and counts:
+                        best_plate = max(counts, key=counts.get)
+                        today_plates[str(tid)] = best_plate
                 today_plate_counts = {
                     str(tid): counts
                     for tid, counts in self.vehicle_plate_counts.items()
                 }
-                # self.log(f"[PERSIST] _save_state: Converted plate_counts: {len(today_plate_counts)}")
-                
-                # self.log(f"[PERSIST] _save_state: Converting vehicle_directions...")
                 today_directions = {
                     str(tid): direction
                     for tid, direction in self.vehicle_directions.items()
                 }
-                # self.log(f"[PERSIST] _save_state: Converted directions: {len(today_directions)}")
                 
                 # Persist UUID mapping (for restart resilience)
                 global _track_id_to_uuid, _uuid_mapping_lock
@@ -1918,20 +1912,16 @@ class PlateProcessor:
                     }
                 
                 # Persist notification sent status (now by UUID, not track_id)
-                # self.log(f"[PERSIST] _save_state: Processing telegram sent status...")
                 global _vehicle_telegram_sent_with_plate, _vehicle_telegram_sent_without_plate
                 sent_with_plate_list = []
                 sent_without_plate_list = []
                 with _vehicle_telegram_sent_lock:
-                    # self.log(f"[PERSIST] _save_state: Telegram lock acquired")
                     # Now storing UUIDs directly
                     for uuid_str in _vehicle_telegram_sent_with_plate:
                         sent_with_plate_list.append(uuid_str)
                     for uuid_str in _vehicle_telegram_sent_without_plate:
                         sent_without_plate_list.append(uuid_str)
-                    # self.log(f"[PERSIST] _save_state: Telegram lock released")
                 
-                # self.log(f"[PERSIST] _save_state: Building state dict...")
                 state = {
                     "vehicle_plates": today_plates,
                     "vehicle_plate_counts": today_plate_counts,
@@ -1941,13 +1931,9 @@ class PlateProcessor:
                     "sent_without_plate": sent_without_plate_list,
                     "timestamp": datetime.now().isoformat(),
                 }
-                # self.log(f"[PERSIST] _save_state: State dict built, size={len(str(state))} chars")
 
-                # self.log(f"[PERSIST] _save_state: Writing to file {state_file}...")
                 with open(state_file, "w", encoding="utf-8") as f:
                     json.dump(state, f, indent=2, ensure_ascii=False)
-                # self.log(f"[PERSIST] _save_state: ✓ File written successfully")
-            # self.log(f"[PERSIST] _save_state: Lock released")
         except Exception as e:
             self.log(f"[PERSIST] Failed to save state: {e}")
             import traceback

@@ -40,6 +40,8 @@ class FrameProcessor:
         # IDs increment continuously: 1, 2, 3, 4... until midnight daily reset
         self._next_track_id = 1  # Next ID to assign (increments monotonically during session)
         self._bytetrack_to_persistent_id = {}  # Map: ByteTrack ID → persistent ID
+        self._bytetrack_alias = {}  # Map: duplicate ByteTrack ID → canonical ByteTrack ID (same physical vehicle)
+        self._bytetrack_last_seen = {}  # Map: ByteTrack ID -> last frame timestamp
         self._retired_track_ids = set()  # Track IDs that have been used
         self._last_frame_bytetrack_ids = set()  # Track IDs from previous frame (detect reuse)
         
@@ -47,6 +49,13 @@ class FrameProcessor:
         self.detection_config = get_detection_config()
         self.vehicle_classes = self.detection_config.get(
             "vehicle_classes", [2, 5, 6, 7, 8]
+        )
+        self.tracking_config = get_tracking_config()
+        self._bytetrack_reuse_timeout_seconds = self.tracking_config.get(
+            "bytetrack_reuse_timeout_seconds", 2.0
+        )
+        self._duplicate_iou_threshold = self.tracking_config.get(
+            "duplicate_iou_threshold", 0.65
         )
         self.log(f"[DETECT] vehicle_classes sử dụng: {self.vehicle_classes}")
         
@@ -123,6 +132,8 @@ class FrameProcessor:
             # Reset persistent track ID mapping for new day
             self._next_track_id = 1
             self._bytetrack_to_persistent_id.clear()
+            self._bytetrack_alias.clear()
+            self._bytetrack_last_seen.clear()
             self._retired_track_ids.clear()
             self._last_frame_bytetrack_ids.clear()
             
@@ -148,7 +159,12 @@ class FrameProcessor:
             self.log(f"[PERSIST_ID] Resuming track ID counter from {next_id} (was {self._next_track_id})")
             self._next_track_id = next_id
 
-    def get_persistent_track_id(self, bytetrack_id: int, current_time: datetime = None) -> int:
+    def get_persistent_track_id(
+        self,
+        bytetrack_id: int,
+        current_time: datetime = None,
+        plate_processor: Any = None,
+    ) -> int:
         """
         Map ByteTrack ID to a persistent, non-reusable track ID.
         
@@ -162,6 +178,53 @@ class FrameProcessor:
         Returns:
             Persistent track ID (monotonically increasing, resets only at midnight)
         """
+        last_seen = self._bytetrack_last_seen.get(bytetrack_id)
+
+        # === RESOLVE DUPLICATE ALIAS ===
+        # If this ByteTrack ID was previously suppressed as a duplicate of another
+        # ByteTrack ID (same physical vehicle), reuse the canonical vehicle's
+        # persistent ID instead of creating a phantom new vehicle. This handles the
+        # case where ByteTrack alternates which of two overlapping IDs it emits.
+        if (
+            bytetrack_id not in self._bytetrack_to_persistent_id
+            and bytetrack_id in self._bytetrack_alias
+        ):
+            # Follow the alias chain to the canonical ByteTrack ID.
+            canonical_id = bytetrack_id
+            seen_ids = {canonical_id}
+            while (
+                canonical_id in self._bytetrack_alias
+                and self._bytetrack_alias[canonical_id] not in seen_ids
+            ):
+                canonical_id = self._bytetrack_alias[canonical_id]
+                seen_ids.add(canonical_id)
+
+            canonical_persistent_id = self._bytetrack_to_persistent_id.get(canonical_id)
+            if canonical_persistent_id is not None:
+                self._bytetrack_to_persistent_id[bytetrack_id] = canonical_persistent_id
+                self.log(
+                    f"[PERSIST_ID] Duplicate ByteTrack={bytetrack_id} resolved to "
+                    f"canonical ByteTrack={canonical_id} → Persistent={canonical_persistent_id}"
+                )
+
+        # ByteTrack may recycle small IDs like 1,2 after a vehicle disappears.
+        # If the same ByteTrack ID reappears after a gap, treat it as a new vehicle.
+        if (
+            bytetrack_id in self._bytetrack_to_persistent_id
+            and current_time is not None
+            and last_seen is not None
+        ):
+            gap_seconds = (current_time - last_seen).total_seconds()
+            if gap_seconds > self._bytetrack_reuse_timeout_seconds:
+                old_persistent_id = self._bytetrack_to_persistent_id.pop(bytetrack_id)
+                self.log(
+                    f"[TRACK_REUSE] ByteTrack={bytetrack_id} reappeared after {gap_seconds:.1f}s "
+                    f"(threshold={self._bytetrack_reuse_timeout_seconds:.1f}s). "
+                    f"Remapping old persistent_id={old_persistent_id} to a new vehicle ID."
+                )
+                if plate_processor is not None:
+                    plate_processor.clear_vehicle_data(old_persistent_id)
+
         # === ASSIGN NEW PERSISTENT ID OR RETURN EXISTING ===
         if bytetrack_id not in self._bytetrack_to_persistent_id:
             # New ByteTrack ID - assign next persistent ID (no timeout recycling!)
@@ -171,7 +234,80 @@ class FrameProcessor:
             self._next_track_id += 1
             self.log(f"[PERSIST_ID] New vehicle: ByteTrack={bytetrack_id} → Persistent={persistent_id}")
         
+        if current_time is not None:
+            self._bytetrack_last_seen[bytetrack_id] = current_time
+
         return self._bytetrack_to_persistent_id[bytetrack_id]
+
+    @staticmethod
+    def _xywh_to_xyxy(box) -> tuple:
+        """Convert YOLO xywh box to xyxy tuple for overlap checks."""
+        x, y, w, h = [float(v) for v in box]
+        return (x - w / 2, y - h / 2, x + w / 2, y + h / 2)
+
+    @staticmethod
+    def _bbox_iou(box_a: tuple, box_b: tuple) -> float:
+        """Compute IoU for two xyxy boxes."""
+        ax1, ay1, ax2, ay2 = box_a
+        bx1, by1, bx2, by2 = box_b
+
+        inter_x1 = max(ax1, bx1)
+        inter_y1 = max(ay1, by1)
+        inter_x2 = min(ax2, bx2)
+        inter_y2 = min(ay2, by2)
+
+        inter_w = max(0.0, inter_x2 - inter_x1)
+        inter_h = max(0.0, inter_y2 - inter_y1)
+        inter_area = inter_w * inter_h
+        if inter_area <= 0:
+            return 0.0
+
+        area_a = max(0.0, ax2 - ax1) * max(0.0, ay2 - ay1)
+        area_b = max(0.0, bx2 - bx1) * max(0.0, by2 - by1)
+        union = area_a + area_b - inter_area
+        return inter_area / union if union > 0 else 0.0
+
+    def _filter_duplicate_detections(self, detections: list) -> list:
+        """
+        Suppress overlapping duplicate tracks for the same physical vehicle.
+
+        Prefer detections whose ByteTrack IDs already have persistent history,
+        then fall back to higher confidence and larger area.
+        """
+        def priority(det):
+            existing_persistent_id = self._bytetrack_to_persistent_id.get(det["bytetrack_id"])
+            history_len = len(self.track_history.get(existing_persistent_id, [])) if existing_persistent_id is not None else 0
+            has_existing_mapping = 1 if existing_persistent_id is not None else 0
+            area = float(det["box"][2]) * float(det["box"][3])
+            return (has_existing_mapping, history_len, det["confidence"], area)
+
+        kept = []
+        for detection in sorted(detections, key=priority, reverse=True):
+            candidate_xyxy = self._xywh_to_xyxy(detection["box"])
+            duplicate_of = None
+            for kept_detection in kept:
+                kept_xyxy = self._xywh_to_xyxy(kept_detection["box"])
+                if self._bbox_iou(candidate_xyxy, kept_xyxy) >= self._duplicate_iou_threshold:
+                    duplicate_of = kept_detection
+                    break
+
+            if duplicate_of is not None:
+                # Remember that this ByteTrack ID is the same physical vehicle as the
+                # kept one. On future frames where only this duplicate ID appears
+                # (the kept ID momentarily missing), we resolve it back to the same
+                # persistent vehicle instead of spawning a phantom new vehicle.
+                self._bytetrack_alias[detection["bytetrack_id"]] = duplicate_of["bytetrack_id"]
+                self.log(
+                    f"[TRACK_DEDUP] Suppressed duplicate ByteTrack={detection['bytetrack_id']} "
+                    f"(class={detection['class_id']}, conf={detection['confidence']:.3f}) "
+                    f"overlapping with ByteTrack={duplicate_of['bytetrack_id']} "
+                    f"(class={duplicate_of['class_id']}, conf={duplicate_of['confidence']:.3f})"
+                )
+                continue
+
+            kept.append(detection)
+
+        return kept
 
     def process_frame_streaming(self, frame: np.ndarray, frame_timestamp: datetime, plate_processor: Any) -> np.ndarray:
         """
@@ -194,7 +330,7 @@ class FrameProcessor:
         
         # === VEHICLE DETECTION TIMING ===
         # with time_block("[VEHICLE_DETECT]", self.log):
-        tracking_config = get_tracking_config()
+        tracking_config = self.tracking_config
         
         # Use fresh tracker on first frame after daily reset
         use_persist = True
@@ -228,54 +364,40 @@ class FrameProcessor:
         ):
             boxes = results[0].boxes.xywh.cpu()
             track_ids = results[0].boxes.id.int().cpu().tolist()
+            confidences = (
+                results[0].boxes.conf.cpu().tolist()
+                if hasattr(results[0].boxes, "conf") and results[0].boxes.conf is not None
+                else [0.0] * len(track_ids)
+            )
             class_id_list = (
                 results[0].boxes.cls.int().cpu().tolist()
                 if hasattr(results[0].boxes, "cls")
                 else [None] * len(track_ids)
             )
+
+            detections = [
+                {
+                    "box": box,
+                    "bytetrack_id": bytetrack_id,
+                    "class_id": class_id,
+                    "confidence": float(confidence),
+                }
+                for box, bytetrack_id, class_id, confidence in zip(boxes, track_ids, class_id_list, confidences)
+            ]
+            detections = self._filter_duplicate_detections(detections)
+
+            boxes = [detection["box"] for detection in detections]
+            track_ids = [detection["bytetrack_id"] for detection in detections]
+            class_id_list = [detection["class_id"] for detection in detections]
+
             current_track_ids = set(track_ids)
 
             self.log(f"[TRACK] Detected vehicle IDs: {sorted(list(current_track_ids))}")
 
-            # === DETECT BYTETRACK REUSE AND CLEAR OLD MAPPINGS ===
-            # ByteTrack reuses IDs when vehicles disappear for > 300 seconds.
-            # When all ByteTrack IDs change AND we have old mappings:
-            # 1. Clear ByteTrack→Persistent mappings (allow new assignments)
-            # 2. Keep persistent ID counter ticking UP (don't reset to 1!)
-            # 3. Clear old vehicle data from plate_processor (UUID, direction, plates)
-            if (
-                current_track_ids and 
-                self._bytetrack_to_persistent_id and 
-                not current_track_ids.intersection(self._last_frame_bytetrack_ids)
-            ):
-                # No overlap between current and previous frame ByteTrack IDs
-                # AND we have old mappings: ByteTrack likely reset
-                old_mappings = dict(self._bytetrack_to_persistent_id)
-                old_persistent_ids = list(old_mappings.values())
-                
-                self.log(
-                    f"[TRACK_REUSE] ⚠️ ByteTrack ID reuse detected! "
-                    f"Current={sorted(current_track_ids)}, "
-                    f"Previous={sorted(self._last_frame_bytetrack_ids)}, "
-                    f"Old_Mappings={old_mappings}"
-                )
-                
-                # Clear old ByteTrack→Persistent mappings only (keep counter ticking)
-                self._bytetrack_to_persistent_id.clear()
-                # ⚠️ IMPORTANT: DO NOT reset _next_track_id=1! Keep it incrementing
-                # This ensures persistent IDs keep going: 1,2,3,4,5... (not 1,1,1,1)
-                
-                self.log(
-                    f"[TRACK_REUSE] ✓ Cleared ByteTrack mappings. "
-                    f"Persistent ID counter keeps incrementing (current={self._next_track_id}). "
-                    f"Cleaning old vehicle data from plate_processor for old IDs: {old_persistent_ids}"
-                )
-                
-                # Clear old vehicle data (UUID mapping, direction, plates) from plate_processor
-                # so new vehicles with same persistent IDs won't inherit old data
-                for old_persistent_id in old_persistent_ids:
-                    plate_processor.clear_vehicle_data(old_persistent_id)
-                    self.log(f"[TRACK_REUSE] ✓ Cleared plate_processor data for old persistent_id={old_persistent_id}")
+            # Reuse detection is handled per ByteTrack ID in get_persistent_track_id()
+            # using a time-gap threshold (bytetrack_reuse_timeout_seconds).
+            # Avoid global no-overlap heuristics here because they can falsely clear
+            # mappings when active IDs naturally change between consecutive frames.
             
             # Update last frame IDs for next iteration
             self._last_frame_bytetrack_ids = current_track_ids.copy()
@@ -306,14 +428,18 @@ class FrameProcessor:
 
             for box, bytetrack_id, class_id in zip(boxes, track_ids, class_id_list):
                 # Convert ByteTrack ID to persistent ID (no timeout recycling - only at midnight!)
-                track_id = self.get_persistent_track_id(bytetrack_id)
+                track_id = self.get_persistent_track_id(
+                    bytetrack_id,
+                    current_time=frame_timestamp,
+                    plate_processor=plate_processor,
+                )
                 
                 class_name = coco_class_map.get(class_id, str(class_id))
                 x, y, w, h = box
                 print(
                     f"[DEBUG] Processing track_id={track_id}, class_id={class_id}, box=({x},{y},{w},{h})"
                 )
-                if w < 230 or h < 90 or y - h / 2 < 10:
+                if w < 230 or h < 90 or y - h / 2 < 8:
                     self.log(
                         f"[TRACK] vehicle_id={track_id} Skipping small/low vehicle: box=({x:.1f},{y:.1f},{w:.1f},{h:.1f})"
                     )

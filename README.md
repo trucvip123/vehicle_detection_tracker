@@ -4,7 +4,6 @@
 
 - 👀 Experiment with detecting vehicles in **real-time** or from **pre-recorded videos**.
 - 📍 Track vehicle positions and follow their movements across frames.
-- 🎨 Explore vehicle classification by **brand** and **color**, powered by MobileNet v3 (with Alibaba MNN backend).
 - 🚀 This POC can serve as a foundation for applications like traffic analysis, surveillance, or automated vehicle monitoring.
 - 🔍 Experiment with YOLO for **precise object detection** in dynamic environments.
 

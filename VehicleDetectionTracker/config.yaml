@@ -23,7 +23,7 @@ detection:
   # COCO class IDs để phát hiện
   # 2 = car, 3 = motorcycle, 5 = bus, 6 = train, 7 = truck, 8 = boat
   # Loại bỏ motorcycle (3) để chỉ phát hiện xe 4 bánh trở lên
-  vehicle_classes: [5, 7, 8]
+  vehicle_classes: [7, 8]
 
 # ============================================
 # Tracking Settings
@@ -34,6 +34,14 @@ tracking:
   
   # Số lượng vị trí tối đa lưu trong lịch sử tracking
   max_history_length: 150
+
+  # Nếu cùng một ByteTrack ID biến mất quá lâu rồi xuất hiện lại,
+  # coi đó là xe mới và cấp persistent vehicle_id mới.
+  bytetrack_reuse_timeout_seconds: 2.0
+
+  # IoU threshold để gộp các detection/track chồng nhau trong cùng frame.
+  # Giúp tránh 1 xe bị tách thành 2 vehicle_id khi model dao động class bus/truck.
+  duplicate_iou_threshold: 0.65
   
 # ============================================
 # License Plate Detection Settings
@@ -133,10 +141,23 @@ telegram:
   
   # Timeout cho mỗi request (giây)
   request_timeout: 15
+
+  # Timeout riêng cho việc thiết lập kết nối (giây).
+  # Ngắn để phát hiện nhanh khi không có mạng.
+  connect_timeout: 10
+
+  # Timeout tối thiểu để CHỜ Telegram xử lý upload và trả về phản hồi (giây).
+  # Đặt đủ lớn để tránh timeout giả khi upload thực tế đã thành công
+  # (nguyên nhân gây gửi trùng thông báo khi retry).
+  read_timeout: 60
   
   # Thời gian chờ giữa các lần thử lại (giây)
   # Áp dụng exponential backoff
   retry_delays: [2, 4, 8]
+
+  # Mục tiêu dung lượng ảnh gửi Telegram (KB).
+  # Ảnh lớn hơn ngưỡng này sẽ được nén JPEG tự động trước khi upload.
+  max_upload_kb: 900
   
   # Chỉ retry 1 lần cho lỗi DNS (vì thường không tự khắc phục)
   dns_retry_delay: 2
