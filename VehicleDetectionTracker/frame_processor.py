@@ -468,6 +468,7 @@ class FrameProcessor:
 
                 # Update last seen (thread-safe via plate_processor)
                 plate_processor.update_vehicle_state(track_id, timestamp=frame_timestamp)
+                plate_processor.mark_vehicle_entry(track_id, frame_timestamp)
                 self.log(
                     f"[DEBUG] Updated vehicle_last_seen[{track_id}] = {frame_timestamp}"
                 )

@@ -88,6 +88,8 @@ class PlateProcessor:
         self.vehicle_plate_counts_each_frame = {}  # {track_id: {plate_text: detection_count}} # Count of how many times each plate is detected (incremented on each detection)
         self.vehicle_directions = {}  # {track_id: direction_label}
         self.vehicle_last_seen = {}  # {track_id: timestamp}
+        self.vehicle_entry_times = {}  # {track_id: timestamp}
+        self.vehicle_exit_times = {}  # {track_id: timestamp}
         self._vehicles_without_plate_logged = set()  # Track which vehicles we've already logged as missing plate
         self.vehicle_pending_futures = {}  # {track_id: [future1, future2, ...]} - track background tasks
         self.vehicle_detected_plate_images = {}  # {track_id: path_to_image_with_detected_plate}
@@ -175,6 +177,22 @@ class PlateProcessor:
                 return _track_id_to_uuid[track_id]
 
     # ===== THREAD-SAFE STATE ACCESS METHODS =====
+    def mark_vehicle_entry(self, track_id: int, timestamp: Optional[datetime] = None) -> None:
+        """Record the first time a vehicle is observed."""
+        if timestamp is None:
+            timestamp = datetime.now()
+        with self._state_lock:
+            if track_id not in self.vehicle_entry_times:
+                self.vehicle_entry_times[track_id] = timestamp
+
+    def mark_vehicle_exit(self, track_id: int, timestamp: Optional[datetime] = None) -> None:
+        """Record when a vehicle is considered to have exited the scene."""
+        if timestamp is None:
+            timestamp = datetime.now()
+        with self._state_lock:
+            if track_id not in self.vehicle_exit_times:
+                self.vehicle_exit_times[track_id] = timestamp
+
     def update_vehicle_state(
         self, 
         track_id: int, 
@@ -1676,6 +1694,7 @@ class PlateProcessor:
                 notification_sent = False
             
             if notification_sent:
+                self.mark_vehicle_exit(track_id, frame_timestamp or datetime.now())
                 # === TIME BLOCK: SAVE STATE ===
                 # with time_block(f"[SAVE_STATE] vehicle_id={track_id}", self.log):
                 self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) Saving state (Telegram API was successful)...")
@@ -1763,6 +1782,31 @@ class PlateProcessor:
                         self.log(f"[PERSIST] Set vehicle_last_seen for {len(valid_track_ids)} vehicles to {state_timestamp}")
                     except Exception as ts_err:
                         self.log(f"[PERSIST] ⚠ Could not parse state timestamp: {ts_err}")
+
+                if "vehicle_entry_exit_times" in state:
+                    for track_id_str, time_data in state["vehicle_entry_exit_times"].items():
+                        try:
+                            track_id = int(track_id_str)
+                        except (TypeError, ValueError):
+                            continue
+
+                        if isinstance(time_data, dict):
+                            entry_time = None
+                            exit_time = None
+                            if time_data.get("entry_time"):
+                                try:
+                                    entry_time = datetime.fromisoformat(time_data["entry_time"])
+                                except ValueError:
+                                    entry_time = None
+                            if time_data.get("exit_time"):
+                                try:
+                                    exit_time = datetime.fromisoformat(time_data["exit_time"])
+                                except ValueError:
+                                    exit_time = None
+                            if entry_time is not None:
+                                self.vehicle_entry_times[track_id] = entry_time
+                            if exit_time is not None:
+                                self.vehicle_exit_times[track_id] = exit_time
 
                 # Restore notification sent status (now using UUIDs instead of track_ids)
                 global _vehicle_telegram_sent_with_plate, _vehicle_telegram_sent_without_plate, _vehicle_telegram_sent_lock, _track_id_to_uuid, _uuid_mapping_lock
@@ -1857,6 +1901,8 @@ class PlateProcessor:
                     self.vehicle_plate_counts_each_frame.clear()
                     self.vehicle_directions.clear()
                     self.vehicle_last_seen.clear()
+                    self.vehicle_entry_times.clear()
+                    self.vehicle_exit_times.clear()
                     self.vehicle_detected_plate_images.clear()
                     self.vehicle_pending_futures.clear()
                     self.vehicle_pending_task_count.clear()
@@ -1876,64 +1922,73 @@ class PlateProcessor:
                     error_trace = traceback.format_exc()
                     self.log(f"[DAILY_RESET] ✗ ERROR during reset: {type(e).__name__}: {e}\n{error_trace}")
 
+    def _build_state_payload(self) -> Dict[str, Any]:
+        """Create a JSON-serializable state payload for persistence."""
+        with self._state_lock:
+            today_plates = {
+                str(tid): plate
+                for tid, plate in self.vehicle_plates.items()
+            }
+            # Expand today_plates from vehicle_plate_counts for vehicles not yet in vehicle_plates
+            for tid, counts in self.vehicle_plate_counts.items():
+                if str(tid) not in today_plates and counts:
+                    best_plate = max(counts, key=counts.get)
+                    today_plates[str(tid)] = best_plate
+            today_plate_counts = {
+                str(tid): counts
+                for tid, counts in self.vehicle_plate_counts.items()
+            }
+            today_directions = {
+                str(tid): direction
+                for tid, direction in self.vehicle_directions.items()
+            }
+            today_entry_exit_times = {}
+            for tid, entry_time in self.vehicle_entry_times.items():
+                exit_time = self.vehicle_exit_times.get(tid)
+                today_entry_exit_times[str(tid)] = {
+                    "entry_time": entry_time.isoformat() if isinstance(entry_time, datetime) else None,
+                    "exit_time": exit_time.isoformat() if isinstance(exit_time, datetime) else None,
+                }
+
+            # Persist UUID mapping (for restart resilience)
+            global _track_id_to_uuid, _uuid_mapping_lock
+            uuid_mapping = {}
+            with _uuid_mapping_lock:
+                uuid_mapping = {
+                    str(tid): uuid_str
+                    for tid, uuid_str in _track_id_to_uuid.items()
+                }
+
+            # Persist notification sent status (now by UUID, not track_id)
+            global _vehicle_telegram_sent_with_plate, _vehicle_telegram_sent_without_plate
+            sent_with_plate_list = []
+            sent_without_plate_list = []
+            with _vehicle_telegram_sent_lock:
+                # Now storing UUIDs directly
+                for uuid_str in _vehicle_telegram_sent_with_plate:
+                    sent_with_plate_list.append(uuid_str)
+                for uuid_str in _vehicle_telegram_sent_without_plate:
+                    sent_without_plate_list.append(uuid_str)
+
+            return {
+                "vehicle_plates": today_plates,
+                "vehicle_plate_counts": today_plate_counts,
+                "vehicle_directions": today_directions,
+                "vehicle_entry_exit_times": today_entry_exit_times,
+                "track_id_to_uuid": uuid_mapping,  # NEW: Persist UUID mapping
+                "sent_with_plate": sent_with_plate_list,
+                "sent_without_plate": sent_without_plate_list,
+                "timestamp": datetime.now().isoformat(),
+            }
+
     def _save_state(self) -> None:
         """Save vehicle state to JSON file for persistence (one file per day)."""
         try:
-            with self._state_lock:
-                state_file = self._get_state_file_path()
-                
-                # Convert all data to JSON-serializable format
-                # No need to filter - data already contains only today's vehicles (reset at day start)
-                today_plates = {
-                    str(tid): plate
-                    for tid, plate in self.vehicle_plates.items()
-                }
-                # Expand today_plates from vehicle_plate_counts for vehicles not yet in vehicle_plates
-                for tid, counts in self.vehicle_plate_counts.items():
-                    if str(tid) not in today_plates and counts:
-                        best_plate = max(counts, key=counts.get)
-                        today_plates[str(tid)] = best_plate
-                today_plate_counts = {
-                    str(tid): counts
-                    for tid, counts in self.vehicle_plate_counts.items()
-                }
-                today_directions = {
-                    str(tid): direction
-                    for tid, direction in self.vehicle_directions.items()
-                }
-                
-                # Persist UUID mapping (for restart resilience)
-                global _track_id_to_uuid, _uuid_mapping_lock
-                uuid_mapping = {}
-                with _uuid_mapping_lock:
-                    uuid_mapping = {
-                        str(tid): uuid_str
-                        for tid, uuid_str in _track_id_to_uuid.items()
-                    }
-                
-                # Persist notification sent status (now by UUID, not track_id)
-                global _vehicle_telegram_sent_with_plate, _vehicle_telegram_sent_without_plate
-                sent_with_plate_list = []
-                sent_without_plate_list = []
-                with _vehicle_telegram_sent_lock:
-                    # Now storing UUIDs directly
-                    for uuid_str in _vehicle_telegram_sent_with_plate:
-                        sent_with_plate_list.append(uuid_str)
-                    for uuid_str in _vehicle_telegram_sent_without_plate:
-                        sent_without_plate_list.append(uuid_str)
-                
-                state = {
-                    "vehicle_plates": today_plates,
-                    "vehicle_plate_counts": today_plate_counts,
-                    "vehicle_directions": today_directions,
-                    "track_id_to_uuid": uuid_mapping,  # NEW: Persist UUID mapping
-                    "sent_with_plate": sent_with_plate_list,
-                    "sent_without_plate": sent_without_plate_list,
-                    "timestamp": datetime.now().isoformat(),
-                }
+            state_file = self._get_state_file_path()
+            state = self._build_state_payload()
 
-                with open(state_file, "w", encoding="utf-8") as f:
-                    json.dump(state, f, indent=2, ensure_ascii=False)
+            with open(state_file, "w", encoding="utf-8") as f:
+                json.dump(state, f, indent=2, ensure_ascii=False)
         except Exception as e:
             self.log(f"[PERSIST] Failed to save state: {e}")
             import traceback
