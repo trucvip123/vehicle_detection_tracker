@@ -1,0 +1,1 @@
+"""Domain concepts for vehicle detection."""

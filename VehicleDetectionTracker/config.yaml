@@ -91,7 +91,11 @@ batch_inference:
   # Enable batch accumulator (true/false)
   # - true:  Accumulates detections and OCR in batches (faster, better throughput)
   # - false: Uses traditional per-vehicle processing (lower latency)
-  enabled: false
+  enabled: true
+
+  # Use Ultralytics list-input inference for each accumulated batch.
+  # Keep false to preserve per-vehicle inference behavior; benchmark before enabling.
+  use_true_batch: true
   
   # Target batch size - process when this many plates are accumulated
   # Larger batch = better GPU utilization but higher latency

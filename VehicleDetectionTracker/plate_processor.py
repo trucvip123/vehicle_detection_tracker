@@ -95,6 +95,10 @@ class PlateProcessor:
         self.vehicle_detected_plate_images = {}  # {track_id: path_to_image_with_detected_plate}
         self.vehicle_pending_task_count = {}  # {track_id: count of pending background tasks}
         self._task_count_lock = threading.Lock()  # Lock for task count updates
+        self._batch_vehicle_track_ids = set()
+        self._batch_notification_finalized = set()
+        self._batch_notification_inflight = set()
+        self._batch_notification_last_attempt = {}
         
         # Track pending inference queue tasks separately (for async queue detection)
         self.vehicle_pending_queue_tasks = {}  # {track_id: count of pending queue tasks}
@@ -956,10 +960,14 @@ class PlateProcessor:
             global _vehicle_telegram_sent_with_plate, _vehicle_telegram_sent_lock
             
             vehicles_to_add = {}
-            with _vehicle_telegram_sent_lock:
-                for track_id, vehicle_data in frame_vehicles.items():
-                    if track_id not in _vehicle_telegram_sent_with_plate:
-                        vehicles_to_add[track_id] = vehicle_data
+            for track_id, vehicle_data in frame_vehicles.items():
+                vehicle_uuid = self.get_or_create_uuid(track_id)
+                with _vehicle_telegram_sent_lock:
+                    already_notified = vehicle_uuid in _vehicle_telegram_sent_with_plate
+                with self._task_count_lock:
+                    already_finalized = track_id in self._batch_notification_finalized
+                if not already_notified and not already_finalized:
+                    vehicles_to_add[track_id] = vehicle_data
             
             if not vehicles_to_add:
                 self.log(f"[BATCH_SUBMIT] All vehicles already notified, skipping batch submission")
@@ -976,15 +984,12 @@ class PlateProcessor:
                     vehicle_data['direction'],
                     vehicle_data['timestamp']
                 )
+                with _last_frame_time_lock:
+                    _last_frame_received_time[track_id] = time.time()
+                with self._task_count_lock:
+                    self._batch_vehicle_track_ids.add(track_id)
                 if triggered:
                     batch_triggered = True
-            
-            # Update pending task count for tracking
-            with self._task_count_lock:
-                for track_id in vehicles_to_add.keys():
-                    if track_id not in self.vehicle_pending_task_count:
-                        self.vehicle_pending_task_count[track_id] = 0
-                    self.vehicle_pending_task_count[track_id] += 1
             
             if batch_triggered:
                 self.log(f"[BATCH_SUBMIT] ✓ Batch trigger reached, processing will be initiated by batch processor thread")
@@ -1008,10 +1013,14 @@ class PlateProcessor:
                 batch_stats = self.batch_accumulator.get_batch_stats()
                 pending = batch_stats['pending_items']
                 elapsed_ms = batch_stats['elapsed_ms']
+                time_threshold_ms = min(
+                    self.batch_accumulator.time_threshold_ms,
+                    self.batch_accumulator.max_batch_wait_ms,
+                )
                 
                 # Check if batch is ready or time threshold exceeded
                 has_items = pending > 0
-                time_expired = elapsed_ms > self.batch_accumulator.max_batch_wait_ms
+                time_expired = elapsed_ms >= time_threshold_ms
                 size_threshold = pending >= self.batch_accumulator.batch_size
                 
                 if size_threshold:
@@ -1021,7 +1030,7 @@ class PlateProcessor:
                         self._process_batch(batch)
                 
                 elif time_expired and has_items:
-                    self.log(f"[BATCH_PROCESSOR] Time threshold exceeded ({elapsed_ms:.0f}ms/{self.batch_accumulator.max_batch_wait_ms}ms)")
+                    self.log(f"[BATCH_PROCESSOR] Time threshold exceeded ({elapsed_ms:.0f}ms/{time_threshold_ms}ms)")
                     batch = self.batch_accumulator.flush()
                     if batch:
                         self._process_batch(batch)
@@ -1029,6 +1038,8 @@ class PlateProcessor:
                 else:
                     # Sleep briefly before checking again
                     threading.Event().wait(0.1)
+
+                self._check_and_notify_timed_out_vehicles()
             
             except Exception as e:
                 self.log(f"[BATCH_PROCESSOR] ❌ Error in batch processor loop: {e}")
@@ -1047,12 +1058,25 @@ class PlateProcessor:
             return
         
         self.log(f"[BATCH_PROCESS] Processing batch of {len(frame_vehicles)} vehicles...")
+
+        # Count dispatched batch work, not every frame that the accumulator coalesces.
+        with self._task_count_lock:
+            for track_id in frame_vehicles:
+                self.vehicle_pending_task_count[track_id] = (
+                    self.vehicle_pending_task_count.get(track_id, 0) + 1
+                )
         
         # Submit batch to executor for processing
-        future = self.executor.submit(
-            self._execute_batch_ocr,
-            frame_vehicles
-        )
+        try:
+            future = self.executor.submit(
+                self._execute_batch_ocr,
+                frame_vehicles
+            )
+        except Exception:
+            with self._task_count_lock:
+                for track_id in frame_vehicles:
+                    self.vehicle_pending_task_count[track_id] -= 1
+            raise
         
         # Add callback for when batch completes
         future.add_done_callback(lambda f: self._on_batch_complete(frame_vehicles.keys()))
@@ -1067,9 +1091,14 @@ class PlateProcessor:
         Returns:
             Dict of {track_id: result}
         """
-        vehicle_frames_dict = {
-            tid: v['frame'] for tid, v in frame_vehicles.items()
-        }
+        vehicle_frames_dict = {}
+        frame_metadata = {}
+        for track_id, vehicle_data in frame_vehicles.items():
+            frame_items = vehicle_data.get("frames") or [vehicle_data]
+            for frame_index, frame_data in enumerate(frame_items):
+                frame_key = (track_id, frame_index)
+                vehicle_frames_dict[frame_key] = frame_data["frame"]
+                frame_metadata[frame_key] = (track_id, frame_data)
         
         try:
             # Run batch detection and OCR
@@ -1082,19 +1111,23 @@ class PlateProcessor:
             )
             
             # Update vehicle states with results
-            for track_id, result in batch_results.items():
+            for frame_key, result in batch_results.items():
                 try:
+                    track_id, frame_data = frame_metadata[frame_key]
                     self._handle_batch_plate_result(
                         track_id,
                         result,
-                        frame_vehicles[track_id]['direction'],
-                        frame_vehicles[track_id]['timestamp'],
-                        frame_vehicles[track_id]['vehicle_dir']
+                        frame_data['direction'],
+                        frame_data['timestamp'],
+                        frame_data['vehicle_dir']
                     )
                 except Exception as handle_err:
-                    self.log(f"[BATCH_PROCESS] ❌ Error handling result for track_id={track_id}: {handle_err}")
+                    self.log(f"[BATCH_PROCESS] ❌ Error handling frame_key={frame_key}: {handle_err}")
             
-            self.log(f"[BATCH_PROCESS] ✓ Batch OCR complete for {len(batch_results)} vehicles")
+            self.log(
+                f"[BATCH_PROCESS] ✓ Batch OCR complete for {len(batch_results)} frames "
+                f"across {len(frame_vehicles)} vehicles"
+            )
             return batch_results
         
         except Exception as e:
@@ -1126,6 +1159,9 @@ class PlateProcessor:
             if plate_text and plate_text != "unknown" and plate_text is not None:
                 self.log(f"[BATCH_RESULT] vehicle_id={track_id} ✓ Setting primary plate: '{plate_text}'")
                 self.update_vehicle_state(track_id, plate_text=plate_text, direction=direction, timestamp=timestamp)
+                with self._state_lock:
+                    plate_counts = self.vehicle_plate_counts_each_frame.setdefault(track_id, {})
+                    plate_counts[plate_text] = plate_counts.get(plate_text, 0) + 1
             elif num_detections > 0:
                 # OCR failed but we detected plates - use placeholder
                 placeholder_text = f"DETECTED_{num_detections}x"
@@ -1149,21 +1185,19 @@ class PlateProcessor:
                     if track_id in self.vehicle_pending_task_count:
                         self.vehicle_pending_task_count[track_id] -= 1
                         remaining = self.vehicle_pending_task_count[track_id]
-                        
+
                         if remaining == 0:
-                            # All tasks complete, send notification
-                            self.log(f"[BATCH_COMPLETE] vehicle_id={track_id} All batch tasks complete, sending notification...")
-                            vehicle_dir = f"screenshots/{track_id}"
-                            
-                            # Send notification OUTSIDE the lock
-                            try:
-                                result = self.send_final_vehicle_notification(track_id, vehicle_dir=vehicle_dir)
-                                if result:
-                                    self.log(f"[BATCH_COMPLETE] vehicle_id={track_id} ✓ Notification sent")
-                                else:
-                                    self.log(f"[BATCH_COMPLETE] vehicle_id={track_id} ⚠ Notification failed")
-                            except Exception as notify_err:
-                                self.log(f"[BATCH_COMPLETE] vehicle_id={track_id} ❌ Notification error: {notify_err}")
+                            self.log(
+                                f"[BATCH_COMPLETE] vehicle_id={track_id} All batch tasks done; "
+                                "waiting for vehicle idle timeout before final notification"
+                            )
+                        else:
+                            self.log(
+                                f"[BATCH_COMPLETE] vehicle_id={track_id} Batch done; "
+                                f"{remaining} batch task(s) still pending"
+                            )
+
+            self._check_and_notify_timed_out_vehicles()
         
         except Exception as e:
             self.log(f"[BATCH_COMPLETE] ❌ Error in batch complete callback: {e}")
@@ -1178,42 +1212,98 @@ class PlateProcessor:
         This is called periodically or at specific checkpoints to ensure notifications
         are sent even if no new queue callbacks arrive after the timeout expires.
         """
-        global _last_frame_received_time, _last_frame_time_lock, _vehicle_telegram_sent_with_plate, _vehicle_telegram_sent_lock
-        
-        # Get list of vehicles to check
-        with _last_frame_time_lock:
-            vehicles_to_check = list(_last_frame_received_time.keys())
+        global _last_frame_received_time, _last_frame_time_lock
+        global _vehicle_telegram_sent_with_plate, _vehicle_telegram_sent_lock
+
+        with self._task_count_lock:
+            vehicles_to_check = list(self._batch_vehicle_track_ids)
         
         for track_id in vehicles_to_check:
-            # Skip if already sent with valid plate
+            with self._task_count_lock:
+                if (
+                    track_id in self._batch_notification_finalized
+                    or track_id in self._batch_notification_inflight
+                ):
+                    continue
+                pending_tasks = self.vehicle_pending_task_count.get(track_id, 0)
+
+            if pending_tasks > 0:
+                continue
+
+            with _last_frame_time_lock:
+                last_frame_time = _last_frame_received_time.get(track_id)
+            if last_frame_time is None or time.time() - last_frame_time < VEHICLE_NOTIFICATION_TIMEOUT_SECONDS:
+                continue
+
             vehicle_uuid = self.get_or_create_uuid(track_id)
             with _vehicle_telegram_sent_lock:
                 if vehicle_uuid in _vehicle_telegram_sent_with_plate:
+                    with self._task_count_lock:
+                        self._batch_notification_finalized.add(track_id)
                     continue
-            
-            # Check if this vehicle is ready to notify (timed out)
-            if not self._is_vehicle_ready_to_notify(track_id):
-                continue  # Not ready yet
-            
-            # Check if all tasks are complete
+
+            plate_text, plate_count = self.get_most_detected_plate(track_id)
+            if not plate_text:
+                self.log(
+                    f"[TIMEOUT_NOTIFY] vehicle_id={track_id} No plate recognized across "
+                    f"completed frames (plate_votes={plate_count}); notification skipped"
+                )
+                with self._task_count_lock:
+                    self._batch_notification_finalized.add(track_id)
+                continue
+
+            now = time.time()
             with self._task_count_lock:
-                executor_tasks = self.vehicle_pending_task_count.get(track_id, 0)
-                queue_tasks = self.vehicle_pending_queue_tasks.get(track_id, 0)
-                total_tasks = executor_tasks + queue_tasks
-            
-            if total_tasks == 0:
-                # All tasks done AND vehicle timed out - send notification
-                self.log(f"[TIMEOUT_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) Detected timeout with all tasks complete - sending notification...")
-                
-                # Get vehicle direction
-                with self._state_lock:
-                    direction = self.vehicle_directions.get(track_id, "Unknown")
-                
-                result = self.send_final_vehicle_notification(track_id, vehicle_dir=direction)
-                if result:
-                    self.log(f"[TIMEOUT_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ✓ Notification sent successfully")
-                else:
-                    self.log(f"[TIMEOUT_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ⚠ Notification sending failed or skipped")
+                last_attempt = self._batch_notification_last_attempt.get(track_id, 0)
+                if now - last_attempt < 10:
+                    continue
+                self._batch_notification_last_attempt[track_id] = now
+                self._batch_notification_inflight.add(track_id)
+
+            self.log(
+                f"[TIMEOUT_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) "
+                f"Idle timeout reached; final plate='{plate_text}' ({plate_count} vote(s))"
+            )
+            try:
+                self.executor.submit(self._send_batch_vehicle_notification, track_id)
+            except Exception as error:
+                with self._task_count_lock:
+                    self._batch_notification_inflight.discard(track_id)
+                self.log(f"[TIMEOUT_NOTIFY] vehicle_id={track_id} Could not schedule notification: {error}")
+
+    def _send_batch_vehicle_notification(self, track_id: int) -> None:
+        vehicle_uuid = self.get_or_create_uuid(track_id)
+        try:
+            vehicle_dir = self._get_vehicle_screenshot_dir(track_id)
+            result = self.send_final_vehicle_notification(track_id, vehicle_dir=vehicle_dir)
+            if result:
+                with _vehicle_telegram_sent_lock:
+                    _vehicle_telegram_sent_with_plate.add(vehicle_uuid)
+                with self._task_count_lock:
+                    self._batch_notification_finalized.add(track_id)
+                self.log(f"[TIMEOUT_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ✓ Notification sent successfully")
+            else:
+                self.log(f"[TIMEOUT_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ⚠ Notification failed; retrying later")
+        except Exception as error:
+            self.log(f"[TIMEOUT_NOTIFY] vehicle_id={track_id} Notification error: {error}")
+        finally:
+            with self._task_count_lock:
+                self._batch_notification_inflight.discard(track_id)
+
+    def _get_vehicle_screenshot_dir(self, track_id: int) -> Optional[str]:
+        import glob
+
+        vehicle_last_seen = self.get_vehicle_last_seen_copy().get(track_id)
+        if vehicle_last_seen is None:
+            return None
+        date_str = vehicle_last_seen.strftime("%Y%m%d")
+        pattern = f"screenshots/{date_str}/*_{track_id}"
+        matching_dirs = glob.glob(pattern)
+        if not matching_dirs:
+            return None
+        vehicle_dir = matching_dirs[-1]
+        self.log(f"[BATCH_COMPLETE] vehicle_id={track_id} Resolved screenshot directory: {vehicle_dir}")
+        return vehicle_dir
 
     def _is_vehicle_ready_to_notify(self, track_id: int) -> bool:
         """
@@ -1907,6 +1997,11 @@ class PlateProcessor:
                     self.vehicle_pending_futures.clear()
                     self.vehicle_pending_task_count.clear()
                     self._vehicles_without_plate_logged.clear()
+                    with self._task_count_lock:
+                        self._batch_vehicle_track_ids.clear()
+                        self._batch_notification_finalized.clear()
+                        self._batch_notification_inflight.clear()
+                        self._batch_notification_last_attempt.clear()
                     
                     reset_daily_tracking()  # Reset telegram notification tracking
                     

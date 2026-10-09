@@ -439,7 +439,7 @@ class FrameProcessor:
                 print(
                     f"[DEBUG] Processing track_id={track_id}, class_id={class_id}, box=({x},{y},{w},{h})"
                 )
-                if w < 230 or h < 90 or y - h / 2 < 8:
+                if w < 300 or h < 90 or y - h / 2 < 8:
                     self.log(
                         f"[TRACK] vehicle_id={track_id} Skipping small/low vehicle: box=({x:.1f},{y:.1f},{w:.1f},{h:.1f})"
                     )
