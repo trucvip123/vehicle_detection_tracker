@@ -170,27 +170,7 @@ class PaddleOCRWrapper:
                 try:
                     # OCR với PaddleOCR
                     results = self.ocr.predict(processed_img)
-
-                    if results and len(results) > 0:
-                        # Xử lý kết quả - phiên bản mới có cấu trúc khác
-                        result = results[0] if isinstance(results, list) else results
-
-                        # Cấu trúc mới: dict với rec_texts và rec_scores
-                        if "rec_texts" in result and "rec_scores" in result:
-                            texts = result["rec_texts"]
-                            scores = result["rec_scores"]
-
-                            for text, confidence in zip(texts, scores):
-                                # print("text, confidence:", text, confidence)
-                                has_number = bool(re.search(r"\d", text))
-                                if (
-                                    confidence > 0.3 and has_number
-                                ):  # Threshold thấp hơn
-                                    cleaned_text = self._clean_license_plate_text(text)
-                                    if cleaned_text and len(cleaned_text) >= 3:
-                                        all_text_results.append(
-                                            (cleaned_text, confidence)
-                                        )
+                    all_text_results.extend(self._extract_ocr_candidates(results))
                 except Exception as e:
                     continue
 
@@ -208,6 +188,96 @@ class PaddleOCRWrapper:
         except Exception as e:
             _log_ocr(f"ERROR: Error reading license plate: {e}", "ocr")
             return "unknown"
+
+    def read_license_plate_batch(self, images):
+        """Run OCR on multiple plate crops using PaddleOCR's list-input pipeline."""
+        if not images:
+            return []
+
+        try:
+            processed_by_image = []
+            for image in images:
+                if hasattr(image, "shape"):
+                    img_array = image.copy()
+                else:
+                    from PIL import Image
+
+                    img_array = np.array(Image.open(image) if isinstance(image, str) else image)
+
+                if len(img_array.shape) == 3 and img_array.shape[2] == 3:
+                    img_array = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
+                processed_by_image.append(self._preprocess_image_for_ocr(img_array))
+
+            candidates_by_image = [[] for _ in images]
+            variant_count = max(len(variants) for variants in processed_by_image)
+
+            # Batch corresponding preprocessing variants across all plate crops.
+            for variant_index in range(variant_count):
+                image_indices = [
+                    index
+                    for index, variants in enumerate(processed_by_image)
+                    if variant_index < len(variants)
+                ]
+                variant_batch = [
+                    processed_by_image[index][variant_index]
+                    for index in image_indices
+                ]
+
+                try:
+                    batch_results = self.ocr.predict(variant_batch)
+                    if len(batch_results) != len(variant_batch):
+                        raise RuntimeError(
+                            f"PaddleOCR returned {len(batch_results)} results "
+                            f"for {len(variant_batch)} images"
+                        )
+                except Exception as batch_error:
+                    _log_ocr(
+                        f"Batch predict failed for variant {variant_index + 1}; "
+                        f"falling back to per-image OCR: {batch_error}",
+                        "ocr",
+                    )
+                    batch_results = []
+                    for variant_image in variant_batch:
+                        try:
+                            batch_results.append(self.ocr.predict(variant_image))
+                        except Exception:
+                            batch_results.append([])
+
+                for image_index, result in zip(image_indices, batch_results):
+                    candidates_by_image[image_index].extend(
+                        self._extract_ocr_candidates(result)
+                    )
+
+            recognized_plates = []
+            for candidates in candidates_by_image:
+                if candidates:
+                    candidates.sort(key=lambda item: (item[1], len(item[0])), reverse=True)
+                    plate_text = self._combine_license_plate_results(candidates)
+                    recognized_plates.append(plate_text.upper() if plate_text else "unknown")
+                else:
+                    recognized_plates.append("unknown")
+            return recognized_plates
+        except Exception as e:
+            _log_ocr(f"ERROR: Error reading license plate batch: {e}", "ocr")
+            return [self.read_license_plate(image) for image in images]
+
+    def _extract_ocr_candidates(self, results):
+        """Extract valid text and confidence pairs from PaddleOCR result objects."""
+        candidates = []
+        if not results:
+            return candidates
+
+        result_items = results if isinstance(results, (list, tuple)) else [results]
+        for result in result_items:
+            if "rec_texts" not in result or "rec_scores" not in result:
+                continue
+            for text, confidence in zip(result["rec_texts"], result["rec_scores"]):
+                if confidence <= 0.3 or not re.search(r"\d", text):
+                    continue
+                cleaned_text = self._clean_license_plate_text(text)
+                if cleaned_text and len(cleaned_text) >= 3:
+                    candidates.append((cleaned_text, confidence))
+        return candidates
 
     def _preprocess_image_for_ocr(self, img_array):
         """

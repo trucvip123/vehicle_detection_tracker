@@ -223,7 +223,7 @@ def send_notify_to_telegram(license_plate, direction, timestamp=None, image_path
                         # để tránh timeout giả (nguyên nhân gửi trùng khi retry).
                         # ~1s cho mỗi 100KB, và tối thiểu là read_timeout đã cấu hình.
                         file_timeout = max(read_timeout, base_timeout + (file_size / (100 * 1024)))
-                        log(f"[Telegram] Upload timeout: connect={connect_timeout:.0f}s, read={file_timeout:.1f}s (file size: {file_size / 1024:.1f}KB)", "telegram")
+                        # log(f"[Telegram] Upload timeout: connect={connect_timeout:.0f}s, read={file_timeout:.1f}s (file size: {file_size / 1024:.1f}KB)", "telegram")
 
                         # Use (connect, read) tuple timeout for better reliability
                         response = requests.post(

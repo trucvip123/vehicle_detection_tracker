@@ -459,6 +459,11 @@ class FrameProcessor:
                         int(y - h / 2 + 200) : int(y + h / 2 + 40),
                         int(x - w / 2) : int(x + w / 2),
                     ]
+                    if vehicle_frame.size == 0 and vehicle_frame_save_img.size > 0:
+                        vehicle_frame = vehicle_frame_save_img
+                        self.log(
+                            f"[FRAME] vehicle_id={track_id} Plate crop empty; using full vehicle crop instead"
+                        )
                     filename = f"{vehicle_dir}/vehicle_frame_{timestamp_str}.png"
                     # filename_process = f"{vehicle_dir}/vehicle_frame_process_{timestamp_str}.png"
                     cv2.imwrite(filename, vehicle_frame_save_img)

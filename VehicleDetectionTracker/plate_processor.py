@@ -385,8 +385,8 @@ class PlateProcessor:
                 if os.path.exists(image_path) and os.path.getsize(image_path) > 0:
                     detection_count = int(best_detected.split('_')[2]) if len(best_detected.split('_')) > 2 and best_detected.split('_')[2].isdigit() else 0
                     confidence = "HIGH (count >= 2)" if detection_count >= 2 else "LOW (single detection)"
-                    file_size = os.path.getsize(image_path)
-                    self.log(f"[IMAGE_SELECT] vehicle_id={track_id} ✓ Selected detected_plate: {best_detected} (size={file_size}, {confidence})")
+                    # file_size = os.path.getsize(image_path)
+                    # self.log(f"[IMAGE_SELECT] vehicle_id={track_id} ✓ Selected detected_plate: {best_detected} (size={file_size}, {confidence})")
                     return image_path
                 else:
                     self.log(f"[IMAGE_SELECT] vehicle_id={track_id} ⚠ Detected_plate file empty or not readable: {image_path}")
@@ -400,8 +400,8 @@ class PlateProcessor:
             
             self.log(f"[IMAGE_SELECT] vehicle_id={track_id} Strategy 2: Looking for plate-matching image: {target_filename}")
             if os.path.exists(target_path) and os.path.getsize(target_path) > 0:
-                file_size = os.path.getsize(target_path)
-                self.log(f"[IMAGE_SELECT] vehicle_id={track_id} ✓ Found: {target_filename} (size={file_size})")
+                # file_size = os.path.getsize(target_path)
+                # self.log(f"[IMAGE_SELECT] vehicle_id={track_id} ✓ Found: {target_filename} (size={file_size})")
                 return target_path
             else:
                 self.log(f"[IMAGE_SELECT] vehicle_id={track_id} ℹ Not found: {target_filename}")
@@ -424,8 +424,8 @@ class PlateProcessor:
                 image_sizes.sort(key=lambda x: x[1], reverse=True)
                 best_image = image_sizes[0][0]
                 image_path = os.path.join(vehicle_dir, best_image)
-                file_size = image_sizes[0][1]
-                self.log(f"[IMAGE_SELECT] vehicle_id={track_id} ✓ Found largest image: {best_image} (size={file_size})")
+                # file_size = image_sizes[0][1]
+                # self.log(f"[IMAGE_SELECT] vehicle_id={track_id} ✓ Found largest image: {best_image} (size={file_size})")
                 return image_path
             
             self.log(f"[IMAGE_SELECT] vehicle_id={track_id} ❌ No valid images found in {vehicle_dir} (checked {len(png_files)} PNG files)")
@@ -811,11 +811,11 @@ class PlateProcessor:
                     
                     # Save image and verify it was written
                     cv2.imwrite(detected_image_path, vehicle_frame)
-                    if os.path.exists(detected_image_path) and os.path.getsize(detected_image_path) > 0:
-                        file_size = os.path.getsize(detected_image_path)
-                        self.log(f"[PLATE_IMAGE] vehicle_id={effective_track_id} ✓ Image saved: {detected_image_path} ({file_size} bytes)")
-                    else:
-                        self.log(f"[PLATE_IMAGE] vehicle_id={effective_track_id} ⚠ Image save FAILED or empty: {detected_image_path}")
+                    # if os.path.exists(detected_image_path) and os.path.getsize(detected_image_path) > 0:
+                    #     file_size = os.path.getsize(detected_image_path)
+                    #     self.log(f"[PLATE_IMAGE] vehicle_id={effective_track_id} ✓ Image saved: {detected_image_path} ({file_size} bytes)")
+                    # else:
+                    #     self.log(f"[PLATE_IMAGE] vehicle_id={effective_track_id} ⚠ Image save FAILED or empty: {detected_image_path}")
                     
                     # Track this image as having a successfully detected plate
                     # Store by BOTH track_id and effective_track_id to ensure we can find it later
@@ -1119,7 +1119,8 @@ class PlateProcessor:
                         result,
                         frame_data['direction'],
                         frame_data['timestamp'],
-                        frame_data['vehicle_dir']
+                        frame_data['vehicle_dir'],
+                        frame_data['frame'],
                     )
                 except Exception as handle_err:
                     self.log(f"[BATCH_PROCESS] ❌ Error handling frame_key={frame_key}: {handle_err}")
@@ -1137,7 +1138,7 @@ class PlateProcessor:
             return {}
     
     def _handle_batch_plate_result(self, track_id: int, result: dict, direction: str, 
-                                   timestamp: datetime, vehicle_dir: str) -> None:
+                                   timestamp: datetime, vehicle_dir: str, vehicle_frame: Any) -> None:
         """
         Handle a single plate detection result from batch processing.
         
@@ -1147,6 +1148,7 @@ class PlateProcessor:
             direction: Direction label
             timestamp: Frame timestamp
             vehicle_dir: Vehicle directory
+            vehicle_frame: Vehicle crop passed to batch detection
         """
         try:
             plate_text = result.get('text')
@@ -1162,6 +1164,21 @@ class PlateProcessor:
                 with self._state_lock:
                     plate_counts = self.vehicle_plate_counts_each_frame.setdefault(track_id, {})
                     plate_counts[plate_text] = plate_counts.get(plate_text, 0) + 1
+                    detection_count = plate_counts[plate_text]
+
+                try:
+                    os.makedirs(vehicle_dir, exist_ok=True)
+                    sanitized_plate = self._sanitize_filename(plate_text)
+                    image_name = f"detected_plate_{detection_count:02d}_{sanitized_plate}.png"
+                    image_path = os.path.join(vehicle_dir, image_name)
+                    if vehicle_frame is not None and vehicle_frame.size > 0 and cv2.imwrite(image_path, vehicle_frame):
+                        with self._state_lock:
+                            self.vehicle_detected_plate_images[track_id] = image_path
+                        # self.log(f"[PLATE_IMAGE] vehicle_id={track_id} ✓ Image saved: {image_path}")
+                    # else:
+                    #     self.log(f"[PLATE_IMAGE] vehicle_id={track_id} ⚠ Image save failed or crop empty: {image_path}")
+                except Exception as image_error:
+                    self.log(f"[PLATE_IMAGE] vehicle_id={track_id} ⚠ Could not save detected plate image: {image_error}")
             elif num_detections > 0:
                 # OCR failed but we detected plates - use placeholder
                 placeholder_text = f"DETECTED_{num_detections}x"
@@ -1725,7 +1742,7 @@ class PlateProcessor:
                             self.vehicle_plate_counts[track_id] = {}
                         if plate_text not in self.vehicle_plate_counts[track_id]:
                             self.vehicle_plate_counts[track_id][plate_text] = 1
-                            self.log(f"[PLATE] vehicle_id={track_id} Added to plate_counts: {plate_text}")
+                            # self.log(f"[PLATE] vehicle_id={track_id} Added to plate_counts: {plate_text}")
             
             notification_sent = False
             
@@ -1740,21 +1757,20 @@ class PlateProcessor:
                 stored_path = self.vehicle_detected_plate_images[track_id]
                 if os.path.exists(stored_path) and os.path.getsize(stored_path) > 0:
                     image_path = stored_path
-                    self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) Using stored image: {stored_path}")
+                    # self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) Using stored image: {stored_path}")
                 else:
                     self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ⚠ Stored image not found or empty: {stored_path}")
             
             # If stored image not available, search vehicle_dir
             if not image_path and vehicle_dir:
                 image_path = self._get_best_vehicle_image_by_plate(vehicle_dir, plate_text, track_id)
+                # If no image found, log the error
                 if not image_path:
                     self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ⚠ No image found in {vehicle_dir}")
-                else:
-                    self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ✓ Found image in directory: {image_path}")
+                # else:
+                    # self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ✓ Found image in directory: {image_path}")
             else:
-                if image_path:
-                    self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ✓ Using stored image path")
-                else:
+                if not image_path:
                     self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ⚠ No vehicle_dir provided")
             
             # Send final notification with best plate (OUTSIDE of lock)
@@ -1768,7 +1784,7 @@ class PlateProcessor:
                     frame_timestamp,
                     image_path=image_path,
                 )
-                self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ✓ Telegram API call completed (success={telegram_response.get('ok', False)})")
+                # self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ✓ Telegram API call completed (success={telegram_response.get('ok', False)})")
             except Exception as e:
                 self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ✗ Telegram API error: {e}")
                 telegram_response = {"ok": False, "error": str(e)}
@@ -1777,7 +1793,7 @@ class PlateProcessor:
             telegram_success = telegram_response.get("ok", False)
             if telegram_success:
                 # NOTE: No longer tracking sent status - allow same vehicle to notify multiple times per day
-                self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ✓ Final notification sent with plate={plate_text}")
+                # self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ✓ Final notification sent with plate={plate_text}")
                 notification_sent = True
             else:
                 self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ⚠ Telegram API failed, will retry later")
@@ -1787,9 +1803,9 @@ class PlateProcessor:
                 self.mark_vehicle_exit(track_id, frame_timestamp or datetime.now())
                 # === TIME BLOCK: SAVE STATE ===
                 # with time_block(f"[SAVE_STATE] vehicle_id={track_id}", self.log):
-                self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) Saving state (Telegram API was successful)...")
+                # self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) Saving state (Telegram API was successful)...")
                 self._save_state()
-                self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ✓ State saved")
+                # self.log(f"[FINAL_NOTIFY] vehicle_id={track_id} (uuid={vehicle_uuid[:8]}) ✓ State saved")
                 return True
           
             return False
